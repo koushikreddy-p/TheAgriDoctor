@@ -1,4 +1,3 @@
-````md
 # TheAgriDoctor 🌾
 ### AI-Powered Smart Agriculture & Crop Disease Diagnosis Platform
 
@@ -226,12 +225,6 @@ Suggested screenshots:
 
 ---
 
-# License
-
-MIT License
-
----
-
 # Author
 
 ## Poreddy Koushik Reddy
@@ -246,4 +239,3 @@ GitHub: https://github.com/koushikreddy-p
 # Live Demo
 
 🌐 https://theagridoctor.vercel.app/
-````
