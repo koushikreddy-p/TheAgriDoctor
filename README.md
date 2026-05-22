@@ -1,36 +1,249 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+````md
+# TheAgriDoctor 🌾
+### AI-Powered Smart Agriculture & Crop Disease Diagnosis Platform
 
-## Getting Started
+🚀 Live Demo: https://theagridoctor.vercel.app/
 
-First, run the development server:
+---
+
+## Overview
+
+TheAgriDoctor is a modern AI-powered agriculture platform designed to assist farmers with intelligent crop disease diagnosis, personalized agricultural guidance, weather intelligence, NDVI monitoring, and smart farm management.
+
+The platform combines AI, geospatial technologies, and modern full-stack architecture to provide real-time decision support for farmers.
+
+Built using Next.js 14, Supabase, OpenRouter AI, Gemini AI, and OpenWeather APIs.
+
+---
+
+# Features
+
+## 🌱 AI Crop Disease Diagnosis
+- Upload up to 5 crop images
+- AI-powered disease detection
+- Severity analysis
+- Treatment recommendations
+- Prevention suggestions
+- Yield impact estimation
+
+## 🤖 Personalized AI Farming Advisor
+- Real-time streaming AI chat
+- Context-aware agricultural assistance
+- Voice input support
+- Multilingual responses
+- Farm-specific recommendations
+
+## 🌦 Weather & NDVI Intelligence
+- Real-time weather monitoring
+- Soil temperature tracking
+- UV index monitoring
+- NDVI satellite visualization
+- 5-day forecasting
+
+## 🗺 Smart Farm Management
+- Multi-farm support
+- Crop cycle tracking
+- GeoJSON polygon mapping
+- Stage-wise crop task generation
+
+## 📊 Community & Alerts
+- Farmer discussion platform
+- AI-assisted replies
+- Smart notifications
+- Agricultural alerts
+- Diagnosis heatmaps
+
+---
+
+# Tech Stack
+
+## Frontend
+- Next.js 14 (App Router)
+- React 18
+- Tailwind CSS
+- shadcn/ui
+- Zustand
+- TanStack Query
+- React Hook Form
+- Zod
+
+## Backend
+- Next.js Route Handlers
+- Supabase PostgreSQL
+- Supabase Auth
+- Supabase Storage
+
+## AI & APIs
+- OpenRouter AI
+- Gemini 2.5 Flash
+- OpenWeather Agro API
+- Leaflet Maps
+
+## Deployment
+- Vercel
+- Supabase Cloud
+
+---
+
+# System Architecture
+
+- Next.js App Router frontend
+- Server Components + Route Handlers
+- Supabase PostgreSQL database
+- JWT authentication
+- Multi-provider AI fallback system
+- Edge-ready deployment architecture
+
+---
+
+# AI Pipeline
+
+```txt
+OpenRouter Vision Models
+    ↓
+Gemma Vision
+    ↓
+Qwen VL
+    ↓
+Llama Vision
+    ↓
+Gemini 2.5 Flash Fallback
+```
+
+This architecture ensures reliability even during provider failures or rate limits.
+
+---
+
+# Core Modules
+
+- Authentication & Profile Management
+- Farm Management
+- Crop Cycle Tracking
+- AI Disease Diagnosis
+- Personalized AI Advisor
+- Weather & NDVI Dashboard
+- Market Price Browser
+- Community Forum
+- Smart Alerts & Notifications
+
+---
+
+# Performance & Security
+
+- JWT-based authentication
+- RLS-ready database schema
+- Secure image uploads
+- Optimized API routes
+- Dynamic component loading
+- Mobile responsive UI
+- Edge deployment optimization
+
+---
+
+# Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/koushikreddy-p/TheAgriDoctor.git
+```
+
+Navigate into the project directory:
+
+```bash
+cd TheAgriDoctor
+```
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+# Environment Variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Create a `.env.local` file:
 
-## Learn More
+```env
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
 
-To learn more about Next.js, take a look at the following resources:
+OPENROUTER_API_KEY=
+GEMINI_API_KEY=
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+OPENWEATHER_API_KEY=
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+# Project Highlights
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Production-ready full-stack architecture
+- AI-powered agriculture assistance
+- Real-time streaming AI chat
+- Multi-provider AI fallback system
+- Geo-spatial farm visualization
+- Mobile-first responsive dashboard
+- Cloud-native deployment
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+# Future Improvements
+
+- Offline diagnosis support
+- Native mobile application
+- Push notifications
+- AI-powered yield prediction
+- IoT sensor integration
+- Advanced multilingual support
+
+---
+
+# Screenshots
+
+Add project screenshots inside:
+
+```txt
+/screenshots
+```
+
+Suggested screenshots:
+- Dashboard
+- AI Diagnosis
+- Advisor Chat
+- Weather Module
+- Heatmap
+- Farm Management
+
+---
+
+# License
+
+MIT License
+
+---
+
+# Author
+
+## Poreddy Koushik Reddy
+
+Final Year Computer Science Engineering Student  
+Full Stack Developer | AI Enthusiast
+
+GitHub: https://github.com/koushikreddy-p
+
+---
+
+# Live Demo
+
+🌐 https://theagridoctor.vercel.app/
+````
