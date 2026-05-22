@@ -234,6 +234,8 @@ Full Stack Developer | AI Enthusiast
 
 GitHub: https://github.com/koushikreddy-p
 
+You can Download full document [HERE](https://drive.google.com/uc?export=download&id=1vNIu23TJUaoKOJCpWa4gMY2Y_vItQwga)
+
 ---
 
 # Live Demo
