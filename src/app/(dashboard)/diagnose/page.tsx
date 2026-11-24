@@ -66,7 +66,15 @@ export default function DiagnosePage() {
 
       // Compress photos in the browser (≈1280 px JPEG) — faster uploads and stays under request limits
       setUiState('uploading')
-      const compressed = await Promise.all(files.map(f => compressImage(f)))
+      // One at a time: keeps memory low on budget phones (12 MP photos decode to ~48 MB each)
+      const compressed: { blob: Blob; dataUrl: string }[] = []
+      for (const f of files) {
+        try {
+          compressed.push(await compressImage(f))
+        } catch {
+          throw new Error(`Could not read "${f.name}". Please use a JPG or PNG photo.`)
+        }
+      }
       const base64Array = compressed.map(c => c.dataUrl)
 
       // Store the compressed images in Supabase Storage (non-fatal if it fails)

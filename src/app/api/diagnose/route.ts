@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { aiJson, AiChainError, VISION_CHAIN } from '@/lib/ai'
+import { rateLimitResponse } from '@/lib/rate-limit'
 import type { DiagnosisReport } from '@/types/diagnose'
 
 export const maxDuration = 60
@@ -77,10 +78,15 @@ export async function POST(req: NextRequest) {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const body = await req.json()
-    const { imageBase64Array, cropType } = body as { imageBase64Array: string[]; cropType: string }
+    const limited = rateLimitResponse('diagnose', user.id)
+    if (limited) return limited
 
-    if (!Array.isArray(imageBase64Array) || !imageBase64Array.length || !cropType?.trim()) {
+    const body = (await req.json().catch(() => ({}))) as { imageBase64Array?: unknown; cropType?: unknown; imagePaths?: unknown }
+    const imageBase64Array = body.imageBase64Array as string[]
+    // Crop name goes into the AI prompt: keep it short and plain to limit prompt injection.
+    const cropType = typeof body.cropType === 'string' ? body.cropType.replace(/[^A-Za-z0-9 ()\-\u0900-\u0DFF]/g, '').trim().slice(0, 40) : ''
+
+    if (!Array.isArray(imageBase64Array) || !imageBase64Array.length || !cropType) {
       return NextResponse.json({ error: 'imageBase64Array and cropType are required' }, { status: 400 })
     }
     if (imageBase64Array.length > MAX_IMAGES) {
@@ -93,9 +99,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Images are too large. Please upload fewer or smaller photos.' }, { status: 413 })
     }
 
-    // Only keep storage paths that belong to this user (bucket policy also enforces this).
+    // Only accept storage paths of the exact shape our uploader creates, inside this user's own folder.
+    // (Storage policies enforce the same rule; this keeps junk out of the database.)
+    const ownPath = new RegExp(`^${user.id}/[A-Za-z0-9_-]+\\.(jpg|png)$`)
     const imagePaths: string[] = Array.isArray(body.imagePaths)
-      ? (body.imagePaths as unknown[]).filter((p): p is string => typeof p === 'string' && p.startsWith(`${user.id}/`)).slice(0, MAX_IMAGES)
+      ? (body.imagePaths as unknown[]).filter((p): p is string => typeof p === 'string' && ownPath.test(p)).slice(0, MAX_IMAGES)
       : []
 
     let report: DiagnosisReport
@@ -104,11 +112,11 @@ export async function POST(req: NextRequest) {
       const result = await aiJson(
         {
           system: SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: `Analyze this ${cropType.trim()} crop image for diseases. Return only the JSON object, nothing else.` }],
+          messages: [{ role: 'user', content: `Analyze this ${cropType} crop image for diseases. Return only the JSON object, nothing else.` }],
           images: imageBase64Array,
         },
         validateReport,
-        { label: 'diagnose', chain: VISION_CHAIN, maxTokens: 1500, temperature: 0.1, attemptTimeoutMs: 40_000 }
+        { label: 'diagnose', chain: VISION_CHAIN, maxTokens: 1500, temperature: 0.1, attemptTimeoutMs: 30_000 }
       )
       report = result.data
       model = result.model
@@ -124,7 +132,7 @@ export async function POST(req: NextRequest) {
       .from('diagnoses')
       .insert({
         user_id: user.id,
-        crop_type: cropType.trim(),
+        crop_type: cropType,
         image_urls: imagePaths,
         disease_name: report.disease_name,
         confidence_pct: report.confidence_pct,
@@ -141,8 +149,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ report, diagnosisId: diagnosis.id, model })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[/api/diagnose] Error:', message)
-    return NextResponse.json({ error: message }, { status: 500 })
+    console.error('[/api/diagnose] Error:', err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Something went wrong. Please try again.' }, { status: 500 })
   }
 }

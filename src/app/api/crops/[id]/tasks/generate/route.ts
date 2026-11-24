@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { generateTasks, dueDateFromOffset } from '@/lib/crop-tasks'
+import { rateLimitResponse } from '@/lib/rate-limit'
 
 // AI fallback chain may try several models; allow time for it.
 export const maxDuration = 60
@@ -11,6 +12,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    const limited = rateLimitResponse('tasks', user.id)
+    if (limited) return limited
 
     const body = (await req.json().catch(() => ({}))) as { replace_pending?: boolean }
 
@@ -76,6 +80,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ tasks: data, generated_count: data?.length ?? 0 })
   } catch (err) {
     console.error('[tasks/generate]', err)
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'unknown' }, { status: 500 })
+    return NextResponse.json({ error: 'Could not generate tasks right now. Please try again.' }, { status: 500 })
   }
 }

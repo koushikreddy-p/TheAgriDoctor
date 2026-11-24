@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { aiStream, AiChainError } from '@/lib/ai'
+import { rateLimitResponse } from '@/lib/rate-limit'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 // Allow enough time for the fallback chain (OpenRouter → Gemini) plus streaming.
 export const maxDuration = 60
 
 const HISTORY_LIMIT = 20
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // ─── Build dynamic system prompt from user context ─────────────────────────────
 async function buildSystemPrompt(supabase: SupabaseClient, userId: string): Promise<string> {
@@ -78,8 +80,11 @@ export async function POST(req: NextRequest) {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const { message, sessionId } = (await req.json()) as { message: string; sessionId: string }
-    if (!message?.trim() || !sessionId) {
+    const limited = rateLimitResponse('chat', user.id)
+    if (limited) return limited
+
+    const { message, sessionId } = (await req.json().catch(() => ({}))) as { message?: unknown; sessionId?: unknown }
+    if (typeof message !== 'string' || !message.trim() || typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
       return NextResponse.json({ error: 'message and sessionId required' }, { status: 400 })
     }
     if (message.length > 4000) {
@@ -161,8 +166,8 @@ export async function POST(req: NextRequest) {
         { status: 503 }
       )
     }
-    const msg = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[/api/chat]', msg)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    // Log the detail server-side; never leak internals to the browser.
+    console.error('[/api/chat]', err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Something went wrong. Please try again.' }, { status: 500 })
   }
 }

@@ -166,3 +166,18 @@ await test('missing API key → provider skipped without a network call', async 
 })
 
 process.stdout.write(results.join('\n') + '\n')
+
+// ─── Rate limiter ──────────────────────────────────────────────────────────────
+import * as rlMod from '../src/lib/rate-limit.ts'
+const rl: typeof rlMod = (rlMod as any).default ?? rlMod
+const rlResults: string[] = []
+try {
+  const { limit } = rl.AI_LIMITS.diagnose
+  for (let i = 0; i < limit; i++) assert.equal(rl.checkRateLimit('diagnose', 'user-a').ok, true)
+  const blocked = rl.checkRateLimit('diagnose', 'user-a')
+  assert.equal(blocked.ok, false); assert.ok(blocked.retryAfterSec > 0)
+  assert.equal(rl.checkRateLimit('diagnose', 'user-b').ok, true, 'other users unaffected')
+  assert.equal(rl.checkRateLimit('chat', 'user-a').ok, true, 'buckets are independent')
+  rlResults.push('PASS  rate limiter: blocks after limit, per user, per endpoint')
+} catch (e) { rlResults.push(`FAIL  rate limiter: ${(e as Error).message}`); process.exitCode = 1 }
+process.stdout.write(rlResults.join('\n') + '\n')

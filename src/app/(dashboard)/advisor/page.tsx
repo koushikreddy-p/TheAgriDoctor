@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Send, Plus, MessageSquare, Sprout, Loader2, ChevronLeft, Menu } from 'lucide-react'
+import { Send, Plus, MessageSquare, Sprout, Loader2, Menu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/ui/markdown'
 import { VoiceInput } from '@/components/advisor/voice-input'
@@ -153,7 +153,7 @@ export default function AdvisorPage() {
       })
 
       if (!res.ok) {
-        const err = await res.json()
+        const err = await res.json().catch(() => ({}))
         throw new Error(err.error || 'Failed to send')
       }
 
@@ -198,7 +198,8 @@ export default function AdvisorPage() {
         id: `err-${Date.now()}`,
         session_id: sessionId,
         role: 'assistant',
-        content: '⚠️ Sorry, I encountered an error. Please try again.',
+        // Server messages are already user-friendly (rate limit, all models busy, …)
+        content: `⚠️ ${err instanceof Error && err.message !== 'Failed to fetch' ? err.message : 'Sorry, I encountered an error. Please try again.'}`,
         created_at: new Date().toISOString(),
       }
       setMessages(prev => [...prev, errMsg])

@@ -11,7 +11,7 @@ const isUrl = (r: string) => /^https?:\/\//i.test(r)
  */
 export async function signImageRefs(supabase: SupabaseClient, refs: (string | null | undefined)[], expiresIn = 3600): Promise<(string | null)[]> {
   const paths = Array.from(new Set(refs.filter((r): r is string => !!r && !isUrl(r))))
-  let signed = new Map<string, string>()
+  const signed = new Map<string, string>()
   if (paths.length) {
     const { data } = await supabase.storage.from(DIAGNOSIS_BUCKET).createSignedUrls(paths, expiresIn)
     for (const d of data ?? []) if (d.path && d.signedUrl) signed.set(d.path, d.signedUrl)
