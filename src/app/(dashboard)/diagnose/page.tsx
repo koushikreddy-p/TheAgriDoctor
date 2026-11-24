@@ -7,7 +7,7 @@ import { UploadCloud, X, Loader2, Sprout, AlertCircle, CheckCircle2, ChevronDown
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { fileToBase64 } from '@/lib/upload'
+import { compressImage, uploadDiagnosisImage } from '@/lib/upload'
 import { createClient } from '@/lib/supabase/client'
 
 const CROP_OPTIONS = [
@@ -64,18 +64,17 @@ export default function DiagnosePage() {
       }
       const user = { id: authUser.id }
 
-      // Convert files to base64 for AI inline vision
+      // Compress photos in the browser (≈1280 px JPEG) — faster uploads and stays under request limits
       setUiState('uploading')
-      const base64Array: string[] = await Promise.all(files.map(fileToBase64))
+      const compressed = await Promise.all(files.map(f => compressImage(f)))
+      const base64Array = compressed.map(c => c.dataUrl)
 
-      // Upload to Supabase Storage for permanent storage
-      let imageUrls: string[] = []
+      // Store the compressed images in Supabase Storage (non-fatal if it fails)
+      let imagePaths: string[] = []
       try {
-        const { uploadDiagnosisImage } = await import('@/lib/upload')
-        imageUrls = await Promise.all(files.map(f => uploadDiagnosisImage(f, user.id)))
+        imagePaths = await Promise.all(compressed.map(c => uploadDiagnosisImage(c.blob, user.id)))
       } catch (uploadErr) {
-        console.warn('Storage upload failed, proceeding without storage URLs:', uploadErr)
-        // Non-fatal — AI analysis can still proceed
+        console.warn('Storage upload failed, proceeding without stored images:', uploadErr)
       }
 
       setUiState('analyzing')
@@ -83,7 +82,7 @@ export default function DiagnosePage() {
       const res = await fetch('/api/diagnose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64Array: base64Array, imageUrls, cropType }),
+        body: JSON.stringify({ imageBase64Array: base64Array, imagePaths, cropType }),
       })
 
       const json = await res.json()

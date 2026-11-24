@@ -165,10 +165,11 @@ export default function AdvisorPage() {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = decoder.decode(value, { stream: false })
-        accumulated += chunk
+        // stream: true keeps multi-byte characters (Hindi / Telugu) intact across chunk boundaries
+        accumulated += decoder.decode(value, { stream: true })
         setStreamingContent(accumulated)
       }
+      accumulated += decoder.decode()
 
       // Ensure we got the complete response
       if (accumulated.trim()) {

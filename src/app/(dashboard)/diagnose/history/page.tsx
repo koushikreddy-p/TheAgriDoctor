@@ -1,4 +1,5 @@
 import { requireUser } from '@/lib/auth'
+import { signImageRefs } from '@/lib/storage'
 import Link from 'next/link'
 import type { Diagnosis } from '@/types/diagnose'
 import { AlertTriangle, CheckCircle2, ChevronRight, Sprout, Clock, Filter, MapPin } from 'lucide-react'
@@ -31,7 +32,10 @@ export default async function DiagnoseHistoryPage({
   const { data, error } = await query.limit(50)
 
   void error
-  const diagnoses: Diagnosis[] = (data ?? []) as Diagnosis[]
+  // Sign every thumbnail (first image of each diagnosis) in a single storage call.
+  const rows = (data ?? []) as Diagnosis[]
+  const thumbs = await signImageRefs(supabase, rows.map((d) => d.image_urls?.[0]))
+  const diagnoses: Diagnosis[] = rows.map((d, i) => ({ ...d, image_urls: thumbs[i] ? [thumbs[i] as string] : [] }))
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">

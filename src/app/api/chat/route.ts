@@ -1,114 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { aiStream, AiChainError } from '@/lib/ai'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-const OPENROUTER_MODELS = [
-  'nvidia/nemotron-3-super-120b-a12b:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-]
+// Allow enough time for the fallback chain (OpenRouter → Gemini) plus streaming.
+export const maxDuration = 60
 
-type ChatMsg = { role: string; content: string }
-
-async function tryOpenRouterStream(messages: ChatMsg[]): Promise<Response | null> {
-  const apiKey = process.env.OPENROUTER_API_KEY
-  if (!apiKey) return null
-
-  for (const model of OPENROUTER_MODELS) {
-    try {
-      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://theagridoctor.app',
-          'X-Title': 'TheAgriDoctor',
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          stream: true,
-          max_tokens: 1000,
-          temperature: 0.7,
-        }),
-      })
-      if (res.ok && res.body) return res
-      console.warn(`[chat] OpenRouter ${model} → ${res.status}, trying next`)
-    } catch (err) {
-      console.warn(`[chat] OpenRouter ${model} error:`, err instanceof Error ? err.message : err)
-    }
-  }
-  return null
-}
-
-async function callGeminiText(systemPrompt: string, messages: ChatMsg[]): Promise<string | null> {
-  const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) return null
-  try {
-    const userText = messages
-      .map((m) => (m.role === 'user' ? `User: ${m.content}` : `Assistant: ${m.content}`))
-      .join('\n\n')
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: userText }] }],
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: { maxOutputTokens: 1000, temperature: 0.7 },
-        }),
-      }
-    )
-    if (!res.ok) {
-      console.warn('[chat] Gemini fallback failed:', res.status, (await res.text()).slice(0, 200))
-      return null
-    }
-    const json = await res.json()
-    const text = json?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? ''
-    return text.trim() || null
-  } catch (err) {
-    console.warn('[chat] Gemini error:', err instanceof Error ? err.message : err)
-    return null
-  }
-}
+const HISTORY_LIMIT = 20
 
 // ─── Build dynamic system prompt from user context ─────────────────────────────
 async function buildSystemPrompt(supabase: SupabaseClient, userId: string): Promise<string> {
-  const { data: profile } = await supabase
-    .from('users')
-    .select('full_name, district, state, preferred_language')
-    .eq('id', userId)
-    .single()
-
-  const { data: farms } = await supabase
-    .from('farms')
-    .select('name, total_area_acres, soil_type, water_source, crop_cycles(crop_name, variety, growth_stage, status)')
-    .eq('user_id', userId)
-    .limit(5)
-
-  const { data: lastDiag } = await supabase
-    .from('diagnoses')
-    .select('crop_type, disease_name, severity, created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // Independent lookups run in parallel.
+  const [{ data: profile }, { data: farms }, { data: lastDiag }] = await Promise.all([
+    supabase.from('users').select('full_name, district, state, preferred_language').eq('id', userId).maybeSingle(),
+    supabase
+      .from('farms')
+      .select('name, total_area_acres, soil_type, water_source, crop_cycles(crop_name, variety, growth_stage, status)')
+      .eq('user_id', userId)
+      .limit(5),
+    supabase
+      .from('diagnoses')
+      .select('crop_type, disease_name, severity, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
 
   const farmerName = profile?.full_name ?? 'Farmer'
   const location = [profile?.district, profile?.state].filter(Boolean).join(', ') || 'India'
   const language = profile?.preferred_language ?? 'English'
 
-  const cropContext = farms
-    ?.flatMap((f) =>
-      ((f.crop_cycles as { crop_name: string; variety: string | null; growth_stage: string; status: string }[]) ?? [])
-        .filter((c) => c.status === 'active')
-        .map((c) => `${c.crop_name}${c.variety ? ` (${c.variety})` : ''} — ${c.growth_stage} stage on ${f.name}`)
-    )
-    .join('\n  ') || 'No active crops recorded'
+  const cropContext =
+    farms
+      ?.flatMap((f) =>
+        ((f.crop_cycles as { crop_name: string; variety: string | null; growth_stage: string; status: string }[]) ?? [])
+          .filter((c) => c.status === 'active')
+          .map((c) => `${c.crop_name}${c.variety ? ` (${c.variety})` : ''} — ${c.growth_stage} stage on ${f.name}`)
+      )
+      .join('\n  ') || 'No active crops recorded'
 
-  const farmContext = farms
-    ?.map((f) => `• ${f.name}: ${f.total_area_acres ?? '?'} acres, Soil: ${f.soil_type ?? 'unknown'}, Water: ${f.water_source ?? 'unknown'}`)
-    .join('\n') || 'No farms registered'
+  const farmContext =
+    farms
+      ?.map((f) => `• ${f.name}: ${f.total_area_acres ?? '?'} acres, Soil: ${f.soil_type ?? 'unknown'}, Water: ${f.water_source ?? 'unknown'}`)
+      .join('\n') || 'No farms registered'
 
   const diagContext = lastDiag
     ? `${lastDiag.disease_name ?? 'Unknown'} on ${lastDiag.crop_type} (${lastDiag.severity} severity, ${new Date(lastDiag.created_at).toLocaleDateString()})`
@@ -143,109 +78,89 @@ export async function POST(req: NextRequest) {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const { message, sessionId } = await req.json() as { message: string; sessionId: string }
+    const { message, sessionId } = (await req.json()) as { message: string; sessionId: string }
     if (!message?.trim() || !sessionId) {
       return NextResponse.json({ error: 'message and sessionId required' }, { status: 400 })
     }
-
-    const { data: session } = await supabase
-      .from('chat_sessions')
-      .select('id, title')
-      .eq('id', sessionId)
-      .eq('user_id', user.id)
-      .single()
-
-    if (!session) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+    if (message.length > 4000) {
+      return NextResponse.json({ error: 'Message too long (max 4000 characters)' }, { status: 400 })
     }
 
-    const { data: history } = await supabase
-      .from('chat_messages')
-      .select('role, content')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: true })
-      .limit(20)
+    // Session ownership check, recent history and personalised prompt — all in parallel.
+    const [{ data: session }, { data: recent }, systemPrompt] = await Promise.all([
+      supabase.from('chat_sessions').select('id, title').eq('id', sessionId).eq('user_id', user.id).maybeSingle(),
+      // Newest N messages (then reversed below), so long conversations keep their RECENT context.
+      supabase
+        .from('chat_messages')
+        .select('role, content')
+        .eq('session_id', sessionId)
+        .order('created_at', { ascending: false })
+        .limit(HISTORY_LIMIT),
+      buildSystemPrompt(supabase, user.id),
+    ])
 
-    await supabase.from('chat_messages').insert({ session_id: sessionId, role: 'user', content: message })
+    if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 })
 
+    const history = (recent ?? [])
+      .reverse()
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content as string }))
+
+    const writes: PromiseLike<unknown>[] = [
+      supabase.from('chat_messages').insert({ session_id: sessionId, role: 'user', content: message }),
+    ]
     if (session.title === 'New Conversation') {
       const title = message.length > 60 ? message.slice(0, 60) + '…' : message
-      await supabase.from('chat_sessions').update({ title }).eq('id', sessionId)
+      writes.push(supabase.from('chat_sessions').update({ title }).eq('id', sessionId))
     }
 
-    const systemPrompt = await buildSystemPrompt(supabase, user.id)
+    const [ai] = await Promise.all([
+      aiStream(
+        { system: systemPrompt, messages: [...history, { role: 'user', content: message }] },
+        { label: 'chat', maxTokens: 1000, temperature: 0.7 }
+      ),
+      ...writes,
+    ])
 
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...(history ?? []).map((m) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: message },
-    ]
-
-    const openRouterRes = await tryOpenRouterStream(messages)
-
-    if (!openRouterRes || !openRouterRes.ok || !openRouterRes.body) {
-      // Fallback: non-streaming Gemini
-      const geminiText = await callGeminiText(systemPrompt, messages.filter((m) => m.role !== 'system'))
-      if (geminiText) {
-        await supabase.from('chat_messages').insert({
-          session_id: sessionId,
-          role: 'assistant',
-          content: geminiText,
-        })
-        return new Response(geminiText, {
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        })
+    // Persist the assistant reply once the stream finishes (or the client disconnects).
+    const persisted = ai.done.then(async ({ text }) => {
+      if (text.trim()) {
+        await supabase.from('chat_messages').insert({ session_id: sessionId, role: 'assistant', content: text })
       }
-      throw new Error(`All AI providers failed`)
-    }
+    })
 
-    let fullContent = ''
-    const encoder = new TextEncoder()
-    const decoder = new TextDecoder()
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        const reader = openRouterRes.body!.getReader()
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            const chunk = decoder.decode(value, { stream: true })
-            for (const line of chunk.split('\n')) {
-              if (!line.startsWith('data: ')) continue
-              const data = line.slice(6).trim()
-              if (data === '[DONE]') continue
-              try {
-                const parsed = JSON.parse(data)
-                const token: string = parsed.choices?.[0]?.delta?.content ?? ''
-                if (token) {
-                  fullContent += token
-                  controller.enqueue(encoder.encode(token))
-                }
-              } catch { /* skip malformed chunks */ }
-            }
-          }
-        } finally {
-          reader.releaseLock()
+    // Hold the stream open until the reply is saved, so serverless runtimes don't freeze before the write.
+    const reader = ai.stream.getReader()
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await reader.read()
+        if (done) {
+          await persisted.catch((e) => console.error('[/api/chat] save failed:', e))
           controller.close()
-          if (fullContent.trim()) {
-            await supabase.from('chat_messages').insert({
-              session_id: sessionId,
-              role: 'assistant',
-              content: fullContent,
-            })
-          }
+        } else {
+          controller.enqueue(value)
         }
+      },
+      cancel(reason) {
+        void reader.cancel(reason)
       },
     })
 
-    return new Response(stream, {
+    return new Response(body, {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
-        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-store',
+        'X-AI-Provider': ai.provider,
+        'X-AI-Model': ai.model,
       },
     })
   } catch (err: unknown) {
+    if (err instanceof AiChainError) {
+      return NextResponse.json(
+        { error: 'All AI providers are busy right now. Please try again in a minute.', attempts: err.attempts.length },
+        { status: 503 }
+      )
+    }
     const msg = err instanceof Error ? err.message : 'Unknown error'
     console.error('[/api/chat]', msg)
     return NextResponse.json({ error: msg }, { status: 500 })

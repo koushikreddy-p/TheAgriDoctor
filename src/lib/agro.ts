@@ -1,7 +1,7 @@
 // OpenWeatherMap Agro API client — https://agromonitoring.com/api
 // All endpoints authenticated with ?appid=AGRO_API_KEY
 
-const AGRO_BASE = 'http://api.agromonitoring.com/agro/1.0'
+const AGRO_BASE = 'https://api.agromonitoring.com/agro/1.0'
 
 function requireKey(): string {
   const key = process.env.AGRO_API_KEY

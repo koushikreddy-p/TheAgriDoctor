@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { generateTasks, dueDateFromOffset } from '@/lib/crop-tasks'
 
+// AI fallback chain may try several models; allow time for it.
+export const maxDuration = 60
+
 // POST /api/crops/[id]/tasks/generate — use AI to generate tasks and insert them
 // Body (optional): { replace_pending?: boolean }
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {

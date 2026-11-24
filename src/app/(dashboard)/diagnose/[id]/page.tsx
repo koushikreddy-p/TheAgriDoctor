@@ -1,4 +1,5 @@
 import { requireUser } from '@/lib/auth'
+import { resolveImageUrls } from '@/lib/storage'
 import { notFound } from 'next/navigation'
 import type { Diagnosis, DiagnosisReport } from '@/types/diagnose'
 import {
@@ -76,6 +77,7 @@ export default async function DiagnoseResultPage({ params }: { params: { id: str
   if (error || !data) notFound()
 
   const diagnosis = data as Diagnosis
+  diagnosis.image_urls = await resolveImageUrls(supabase, diagnosis.image_urls)
   const report = diagnosis.full_report_json as DiagnosisReport
   const severity = diagnosis.severity ?? 'low'
   const severityConf = SEVERITY_CONFIG[severity] ?? SEVERITY_CONFIG.low

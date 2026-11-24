@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { aiText } from '@/lib/ai'
 
+// AI fallback chain may try several models; allow time for it.
+export const maxDuration = 60
+
 async function generateAiReply(title: string, body: string, tags: string[]): Promise<string | null> {
   try {
     return await aiText(

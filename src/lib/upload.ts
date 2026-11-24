@@ -1,53 +1,63 @@
 import { createClient } from '@/lib/supabase/client'
 
-const BUCKET = 'diagnosis-images'
+export const DIAGNOSIS_BUCKET = 'diagnosis-images'
 
 /**
- * Uploads a File to Supabase Storage under the user's folder.
- * Returns the signed URL (valid 1 hour) for AI processing.
+ * Downscale + re-encode a photo in the browser before upload / AI analysis.
+ * A 12 MP phone photo (3–5 MB) becomes a ~150–400 KB JPEG at 1280 px, which is
+ * plenty for disease detection, keeps the request under hosting body limits,
+ * and makes the upload much faster on rural mobile networks.
  */
-export async function uploadDiagnosisImage(
+export async function compressImage(
   file: File,
-  userId: string
-): Promise<string> {
-  const supabase = createClient()
+  maxDim = 1280,
+  quality = 0.82
+): Promise<{ blob: Blob; dataUrl: string }> {
+  const bitmap = await createImageBitmap(file)
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height))
+  const w = Math.round(bitmap.width * scale)
+  const h = Math.round(bitmap.height * scale)
 
-  const ext = file.name.split('.').pop() ?? 'jpg'
-  const filename = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas not supported')
+  ctx.drawImage(bitmap, 0, 0, w, h)
+  bitmap.close()
 
-  const { error } = await supabase.storage
-    .from(BUCKET)
-    .upload(filename, file, {
-      cacheControl: '3600',
-      upsert: false,
-      contentType: file.type,
-    })
-
-  if (error) {
-    throw new Error(`Upload failed: ${error.message}`)
-  }
-
-  // Get a signed URL valid for 1 hour for the AI to access
-  const { data, error: urlError } = await supabase.storage
-    .from(BUCKET)
-    .createSignedUrl(filename, 3600)
-
-  if (urlError || !data?.signedUrl) {
-    throw new Error(`Failed to generate signed URL: ${urlError?.message}`)
-  }
-
-  return data.signedUrl
+  const blob = await new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Image encoding failed'))), 'image/jpeg', quality)
+  )
+  const dataUrl = await blobToDataUrl(blob)
+  return { blob, dataUrl }
 }
 
-/**
- * Converts a File to a base64 data URL for inline AI vision calls
- * (used as fallback when signed URLs aren't available)
- */
-export async function fileToBase64(file: File): Promise<string> {
+export function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result as string)
     reader.onerror = reject
-    reader.readAsDataURL(file)
+    reader.readAsDataURL(blob)
   })
+}
+
+/**
+ * Uploads an image to Supabase Storage under the user's own folder.
+ * Returns the storage PATH (not a signed URL): signed URLs expire, so the
+ * path is stored in the database and a fresh signed URL is created whenever
+ * the image is displayed (see resolveImageUrls).
+ */
+export async function uploadDiagnosisImage(image: Blob, userId: string): Promise<string> {
+  const supabase = createClient()
+  const ext = image.type === 'image/png' ? 'png' : 'jpg'
+  const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+
+  const { error } = await supabase.storage.from(DIAGNOSIS_BUCKET).upload(path, image, {
+    cacheControl: '3600',
+    upsert: false,
+    contentType: image.type || 'image/jpeg',
+  })
+  if (error) throw new Error(`Upload failed: ${error.message}`)
+  return path
 }

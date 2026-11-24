@@ -1,4 +1,4 @@
-import { aiText } from '@/lib/ai'
+import { aiJson } from '@/lib/ai'
 
 export type TaskCategory = 'irrigation' | 'fertilization' | 'pest' | 'weeding' | 'monitoring' | 'harvest' | 'other'
 export type TaskPriority = 'low' | 'medium' | 'high'
@@ -65,92 +65,36 @@ export async function generateTasks(input: GenerateTasksInput): Promise<Generate
     .filter(Boolean)
     .join('\n')
 
-  let raw: string
-  let retryCount = 0
-  const maxRetries = 2
+  const CATS: TaskCategory[] = ['irrigation', 'fertilization', 'pest', 'weeding', 'monitoring', 'harvest', 'other']
+  const PRI: TaskPriority[] = ['low', 'medium', 'high']
 
-  while (retryCount <= maxRetries) {
-    try {
-      raw = await aiText(
-        [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userMsg },
-        ],
-        { maxTokens: 1500, temperature: retryCount > 0 ? 0.2 : 0.35 },
-      )
-
-      // Extract JSON — be tolerant of code fences
-      const cleaned = raw
-        .replace(/```(?:json)?/gi, '')
-        .replace(/```/g, '')
-        .trim()
-
-      // Check if response looks truncated (doesn't end with })
-      if (!cleaned.endsWith('}') && !cleaned.endsWith('}]')) {
-        console.error('[crop-tasks] Response appears truncated:', cleaned.slice(-100))
-        if (retryCount >= maxRetries) {
-          throw new Error('AI response was truncated. Please try again.')
-        }
-        retryCount++
-        continue
-      }
-
-      let parsed: unknown
-      try {
-        // find first { and last }
-        const first = cleaned.indexOf('{')
-        const last = cleaned.lastIndexOf('}')
-        const slice = first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned
-        parsed = JSON.parse(slice)
-      } catch (err) {
-        console.error('[crop-tasks] AI returned invalid JSON (attempt ' + (retryCount + 1) + '):', cleaned.slice(0, 500))
-        console.error('[crop-tasks] Parse error:', err)
-        
-        if (retryCount >= maxRetries) {
-          throw new Error('AI returned invalid JSON after multiple attempts. Please try again.')
-        }
-        retryCount++
-        continue
-      }
-
-      const tasks = (parsed as { tasks?: unknown })?.tasks
-      if (!Array.isArray(tasks)) {
-        console.error('[crop-tasks] AI response missing tasks array')
-        if (retryCount >= maxRetries) {
-          throw new Error('AI response missing tasks array')
-        }
-        retryCount++
-        continue
-      }
-
-      const CATS: TaskCategory[] = ['irrigation', 'fertilization', 'pest', 'weeding', 'monitoring', 'harvest', 'other']
-      const PRI: TaskPriority[] = ['low', 'medium', 'high']
-
-      const out: GeneratedTask[] = []
-      for (const t of tasks) {
-        if (!t || typeof t !== 'object') continue
-        const r = t as Record<string, unknown>
-        const title = typeof r.title === 'string' ? r.title.trim().slice(0, 120) : null
-        if (!title) continue
-        const description = typeof r.description === 'string' ? r.description.trim().slice(0, 400) : ''
-        const category = (CATS as string[]).includes(r.category as string) ? (r.category as TaskCategory) : 'other'
-        const priority = (PRI as string[]).includes(r.priority as string) ? (r.priority as TaskPriority) : 'medium'
-        const rawDue = Number(r.due_offset_days)
-        const due_offset_days = Number.isFinite(rawDue) ? Math.max(0, Math.min(30, Math.round(rawDue))) : 0
-        out.push({ title, description, category, priority, due_offset_days })
-      }
-
-      out.sort((a, b) => a.due_offset_days - b.due_offset_days)
-      return out.slice(0, 8)
-    } catch (err) {
-      if (retryCount >= maxRetries) {
-        throw err
-      }
-      retryCount++
+  // Validate + normalise; throwing here makes aiJson retry on a different model.
+  const validate = (value: unknown): GeneratedTask[] => {
+    const tasks = (value as { tasks?: unknown })?.tasks
+    if (!Array.isArray(tasks)) throw new Error('missing "tasks" array')
+    const out: GeneratedTask[] = []
+    for (const t of tasks) {
+      if (!t || typeof t !== 'object') continue
+      const r = t as Record<string, unknown>
+      const title = typeof r.title === 'string' ? r.title.trim().slice(0, 120) : ''
+      if (!title) continue
+      const description = typeof r.description === 'string' ? r.description.trim().slice(0, 400) : ''
+      const category = (CATS as string[]).includes(r.category as string) ? (r.category as TaskCategory) : 'other'
+      const priority = (PRI as string[]).includes(r.priority as string) ? (r.priority as TaskPriority) : 'medium'
+      const rawDue = Number(r.due_offset_days)
+      const due_offset_days = Number.isFinite(rawDue) ? Math.max(0, Math.min(30, Math.round(rawDue))) : 0
+      out.push({ title, description, category, priority, due_offset_days })
     }
+    if (out.length === 0) throw new Error('no valid tasks')
+    return out.sort((a, b) => a.due_offset_days - b.due_offset_days).slice(0, 8)
   }
 
-  throw new Error('Failed to generate tasks after multiple attempts')
+  const { data } = await aiJson(
+    { system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userMsg }] },
+    validate,
+    { label: 'crop-tasks', maxTokens: 1500, temperature: 0.35 }
+  )
+  return data
 }
 
 export function dueDateFromOffset(offsetDays: number): string {
