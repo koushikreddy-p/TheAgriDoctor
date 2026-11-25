@@ -1,0 +1,478 @@
+<h2 data-toc data-key="6.10 Satellite Field Monitoring">6.10 Satellite Field Monitoring</h2>
+<div class="feature-meta">
+<div><b>Where</b>Field monitoring panel on the farm page</div>
+<div><b>API routes</b><code>/api/farms/[id]/monitor</code> (GET, POST, DELETE), <code>/api/farms/[id]/satellite</code></div>
+<div><b>Database</b><code>farms</code> (polygon id, latest scan), <code>notifications</code></div>
+<div><b>External service</b>Agro Monitoring</div>
+</div>
+<h3>What it does</h3>
+<p>Watches the farmer's exact field from space and from weather stations. One scan collects seven readings: weather now, the next two days of forecast (3-hour steps), soil moisture and soil temperature, UV index, crop health from satellite (NDVI value with the satellite and cloud cover, plus NDVI and true-colour images), heat units (growing degree days) and rainfall over the last 30 days.</p>
+<h3>Step by step</h3>
+<ol>
+<li><strong>Enable once:</strong> either enter a field radius (50 m to 5 km, default 300 m) for a square around the farm's location, or press <em>Draw</em> and tap at least 3 corners of the field on a street or satellite map (<em>Undo</em>, <em>Clear</em>, <em>Save polygon</em>).</li>
+<li>The server registers the field with Agro Monitoring and saves the returned polygon id and area (hectares).</li>
+<li><strong>Each visit:</strong> if the last scan is under 10 minutes old it is shown again; otherwise, or when the farmer presses <em>Refresh</em>, a new scan runs.</li>
+<li>The seven readings are requested at the same time; if one fails, the others are still shown.</li>
+<li>The scan is saved on the farm, alerts are checked (6.11), and satellite images are loaded through the server so the API key stays hidden.</li>
+<li><em>Disable</em> (after a confirmation) removes the polygon from Agro Monitoring and clears the saved scan.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens the farm page"]):::term --> B{"Monitoring enabled?"}:::dec
+  B -->|"Yes"| Z(["Continues in part 2"]):::conn
+  B -->|"No"| C{"Draw the field or use a radius?"}:::dec
+  C -->|"Radius"| C1["Square of 50 m to 5 km<br/>around the farm location"]
+  C -->|"Draw"| C2[/"Tap at least 3 corners on the map"/]:::io
+  C1 --> D["Register field with Agro Monitoring"]:::io
+  C2 --> D
+  D --> E[("Save polygon id and area on the farm")]:::store
+  E --> Z
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.10a — Field monitoring, part 1 of 2: enabling. Continues in part 2.</figcaption>
+</figure>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  Z(["From part 1"]):::conn --> F{"Scanned in the last 10 minutes<br/>and Refresh not pressed?"}:::dec
+  F -->|"Yes"| G(["Show the saved scan"]):::term
+  F -->|"No"| H["Request 7 readings at once: weather, forecast,<br/>soil, UV, NDVI, heat units, rainfall"]:::io
+  H --> I[("Save the scan on the farm")]:::store
+  I --> J["Check 9 alert rules; notify new alerts"]
+  J --> K(["Show readings, satellite images and alerts"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.10b — Field monitoring, part 2 of 2: scanning.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/api/farms/[id]/monitor/route.ts</b> — seven readings in parallel (simplified excerpt)</div><pre><code class="language-typescript">async function scanPolygon(polyId: string) {
+  const now = Math.floor(Date.now() / 1000)
+  const thirtyDaysAgo = now - 30 * 86400
+
+  // Fire all requests in parallel; tolerate individual failures
+  const settled = await Promise.allSettled([
+    currentWeather(polyId),
+    forecastWeather(polyId),
+    soil(polyId),
+    uvi(polyId),
+    latestNdviStats(polyId, 30),
+    accumulatedTemperature(polyId, thirtyDaysAgo, now, 10),
+    accumulatedPrecipitation(polyId, thirtyDaysAgo, now),
+  ])
+  const [weatherR, forecastR, soilR, uviR, ndviR, gddR, rainR] = settled
+  const okOrNull = (r) =&gt; (r.status === 'fulfilled' ? r.value : null)
+
+  return {
+    scanned_at: new Date().toISOString(),
+    weather: okOrNull(weatherR),
+    forecast: okOrNull(forecastR)?.slice(0, 16) ?? null,   // next ~2 days at 3h
+    soil: okOrNull(soilR),
+    uvi: okOrNull(uviR),
+    ndvi: okOrNull(ndviR),
+    // … heat units, rainfall, and an error note for any reading that failed …
+  }
+}</code></pre></div>
+
+<h2 data-toc data-key="6.11 Smart Field Alerts">6.11 Smart Field Alerts</h2>
+<div class="feature-meta">
+<div><b>Where</b>Farm page, dashboard field health, notification bell</div>
+<div><b>Code</b><code>src/lib/alerts.ts</code> (<code>computeAlerts</code>)</div>
+<div><b>Database</b><code>notifications</code>, <code>users.alert_preferences</code></div>
+<div><b>Input</b>The latest field scan (6.10)</div>
+</div>
+<h3>What it does</h3>
+<p>Nine rules turn a field scan into plain-language warnings with advice, at two levels: <strong>warning</strong> and <strong>critical</strong>. Only alerts that were not present in the previous scan become notifications, so the farmer is not told about the same heatwave twice.</p>
+<table>
+<thead><tr><th style="width:26%">Rule</th><th style="width:14%">Warning at</th><th style="width:14%">Critical at</th><th>Advice shown</th></tr></thead>
+<tbody>
+<tr><td>Heat (air temperature)</td><td>35 °C</td><td>40 °C</td><td>Increase irrigation, shade susceptible crops</td></tr>
+<tr><td>Cold / frost</td><td>5 °C</td><td>2 °C</td><td>Cover sensitive crops</td></tr>
+<tr><td>Dry soil (moisture)</td><td>below 20%</td><td>below 10%</td><td>Irrigate within 24 h / immediately</td></tr>
+<tr><td>Waterlogged soil</td><td>above 45%</td><td>—</td><td>Risk of waterlogging and root disease</td></tr>
+<tr><td>Hot topsoil</td><td>40 °C</td><td>—</td><td>Mulch or water to protect the root zone</td></tr>
+<tr><td>UV index</td><td>8</td><td>11</td><td>Avoid fieldwork 10 am–4 pm</td></tr>
+<tr><td>Wind</td><td>12 m/s</td><td>17 m/s</td><td>Delay spraying, secure plants</td></tr>
+<tr><td>Rain in the next 48 h</td><td>20 mm</td><td>50 mm</td><td>Prepare drainage, delay fertiliser</td></tr>
+<tr><td>Crop health (mean NDVI)</td><td>below 0.4</td><td>below 0.2</td><td>Inspect the field</td></tr>
+</tbody>
+</table>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["New field scan saved"]):::term --> B["Merge the farmer's thresholds with defaults;<br/>convert Kelvin to Celsius; add up 48 h rain"]
+  B --> D{"For each of the 9 rules:<br/>past the warning or critical level?"}:::dec
+  D -->|"No"| H["No alert for this rule"]
+  D -->|"Yes"| E["Create a warning or critical alert<br/>with advice"]
+  E --> I{"Already in the previous scan?"}:::dec
+  I -->|"Yes"| J["Do not notify again"]
+  I -->|"No"| K[("Save a notification for the farmer")]:::store
+  K --> L(["Bell shows the new alert"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.11 — Turning a scan into alerts.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/lib/alerts.ts</b> — the heat rule (excerpt)</div><pre><code class="language-typescript">const tempC = k2c(snap.weather?.main?.temp)          // Kelvin to Celsius
+if (typeof tempC === 'number') {
+  if (tempC &gt;= (p.temp_high?.critical ?? 40)) {
+    alerts.push({
+      id: 'heat-critical', level: 'critical', title: 'Extreme heat',
+      detail: `Air temperature is ${tempC.toFixed(1)}°C. Risk of heat stress — increase irrigation and shade susceptible crops.`,
+      metric: `${tempC.toFixed(1)}°C`,
+    })
+  } else if (tempC &gt;= (p.temp_high?.warning ?? 35)) {
+    alerts.push({
+      id: 'heat-warning', level: 'warning', title: 'High temperature',
+      detail: `Air temperature is ${tempC.toFixed(1)}°C. Monitor soil moisture closely.`,
+      metric: `${tempC.toFixed(1)}°C`,
+    })
+  }
+  // … frost and cold rules …
+}</code></pre></div>
+<div class="code"><div class="file"><b>src/app/api/farms/[id]/monitor/route.ts</b> — notify only new alerts (excerpt)</div><pre><code class="language-typescript">const prevAlerts = computeAlerts(prev, prefs)
+const nextAlerts = computeAlerts(next, prefs)
+const prevIds = new Set(prevAlerts.map((a) =&gt; a.id))
+const newAlerts = nextAlerts.filter(
+  (a) =&gt; !prevIds.has(a.id) &amp;&amp; (a.level === 'critical' || a.level === 'warning'),
+)
+if (newAlerts.length === 0) return
+
+await supabase.from('notifications').insert(newAlerts.map((a) =&gt; ({
+  user_id: userId,
+  type: `alert_${a.level}`,
+  title: `${farmName}: ${a.title}`,
+  message: a.detail,
+  metadata: { farm_id: farmId, alert_id: a.id, level: a.level, metric: a.metric ?? null },
+})))</code></pre></div>
+
+<h2 data-toc data-key="6.12 Alert Thresholds">6.12 Alert Thresholds</h2>
+<div class="feature-meta">
+<div><b>Page</b><code>/settings/alerts</code> (link from the bell)</div>
+<div><b>API route</b><code>/api/alert-preferences</code> (GET, PUT)</div>
+<div><b>Database</b><code>users.alert_preferences</code> (JSON)</div>
+<div><b>Used by</b>Alert rules (6.11), dashboard (6.2)</div>
+</div>
+<h3>What it does</h3>
+<p>Each farmer can set their own levels for every rule: heat critical and warning, cold critical and warning, soil moisture dry critical and warning, waterlogging warning, hot surface, UV critical and warning, wind critical and warning, rain critical and warning, and crop health (NDVI). A field left empty uses the default. <em>Reset to defaults</em> clears them; <em>Save</em> stores them and shows the time saved.</p>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens Alert thresholds"]):::term --> B[("Load saved thresholds")]:::store
+  B --> C["Show each field with its saved value or the default"]
+  C --> D[/"Farmer changes values"/]:::io
+  D --> E{"Save or Reset?"}:::dec
+  E -->|"Reset"| F["Clear all values; defaults apply"]
+  E -->|"Save"| G[("PUT /api/alert-preferences<br/>store as JSON on the profile")]:::store
+  F --> G
+  G --> H(["Show the time saved; next scan uses the new levels"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+</div>
+<figcaption>Figure 6.12 — Saving personal alert thresholds.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/lib/alerts.ts</b> — defaults merged with the farmer's values (simplified excerpt)</div><pre><code class="language-typescript">export const DEFAULT_ALERT_PREFS = {
+  temp_high: { critical: 40, warning: 35 },
+  temp_low: { critical: 2, warning: 5 },
+  soil_moisture_low: { critical: 0.10, warning: 0.20 },
+  soil_moisture_high: { warning: 0.45 },
+  soil_surface_hot: { warning: 40 },
+  uv: { critical: 11, warning: 8 },
+  wind: { critical: 17, warning: 12 },
+  rain_48h: { critical: 50, warning: 20 },
+  ndvi: { critical: 0.2, warning: 0.4 },
+}
+
+function mergedPrefs(user?: AlertPreferences | null) {
+  const out = JSON.parse(JSON.stringify(DEFAULT_ALERT_PREFS))
+  if (!user) return out
+  for (const k of Object.keys(out)) {
+    const u = user[k]
+    if (u &amp;&amp; typeof u === 'object') Object.assign(out[k], u)     // farmer's value wins
+  }
+  return out
+}</code></pre></div>
+
+<h2 data-toc data-key="6.13 Notifications">6.13 Notifications</h2>
+<div class="feature-meta">
+<div><b>Where</b>Bell in the top bar; page <code>/alerts</code></div>
+<div><b>API route</b><code>/api/notifications</code> (GET, POST)</div>
+<div><b>Database</b><code>notifications</code></div>
+<div><b>Refresh</b>The bell checks every 60 seconds</div>
+</div>
+<h3>What it does</h3>
+<p>The bell shows the number of unread alerts and a list of the 20 latest, each linking to its farm. The Alerts page lists all notifications with filters by level (critical, warning, info) and status (unread, read), pages of results, and actions for one or many: mark read, mark unread, delete, mark all read, and delete all read.</p>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Page open"]):::term --> B["Every 60 seconds: GET /api/notifications?limit=20"]
+  B --> C[("Farmer's notifications and unread count")]:::store
+  C --> D["Bell shows the unread count"]
+  D --> E{"Farmer acts?"}:::dec
+  E -->|"Opens one"| F["Mark it read; go to its farm"]
+  E -->|"Mark all read"| G["POST action mark_all_read"]
+  E -->|"On the Alerts page"| H[/"Filter by level and status;<br/>select several"/]:::io
+  H --> I["POST mark_read, mark_unread,<br/>delete or delete_all_read"]
+  F --> J[("Update read time or delete")]:::store
+  G --> J
+  I --> J
+  J --> K(["List and count refresh"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+</div>
+<figcaption>Figure 6.13 — Notification bell and alerts centre.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/api/notifications/route.ts</b> — actions on notifications (simplified excerpt)</div><pre><code class="language-typescript">switch (body.action) {
+  case 'mark_all_read': {
+    const { error } = await supabase.from('notifications')
+      .update({ read_at: now }).eq('user_id', user.id).is('read_at', null)
+    // …
+  }
+  case 'mark_read': {
+    if (!Array.isArray(body.ids) || body.ids.length === 0)
+      return NextResponse.json({ error: 'ids required' }, { status: 400 })
+    const { error } = await supabase.from('notifications')
+      .update({ read_at: now }).eq('user_id', user.id).in('id', body.ids)
+    // …
+  }
+  // 'mark_unread', 'delete', 'delete_all_read' work the same way
+}</code></pre></div>
+
+<h2 data-toc data-key="6.14 Weather">6.14 Weather</h2>
+<div class="feature-meta">
+<div><b>Page</b><code>/weather</code></div>
+<div><b>API route</b><code>GET /api/weather?lat&amp;lng</code> or <code>?q=city</code></div>
+<div><b>External service</b>OpenWeatherMap (cached 10 minutes)</div>
+<div><b>Default place</b>Hyderabad, if location is not shared</div>
+</div>
+<h3>What it does</h3>
+<p>Shows current temperature, feels-like temperature, humidity, pressure, wind, clouds, sunrise and sunset, and a 5-day forecast (temperature, humidity and chance of rain for each day). The farmer can search for any city.</p>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens Weather"]):::term --> B{"Browser shares location<br/>within 5 seconds?"}:::dec
+  B -->|"Yes"| C["Use latitude and longitude"]
+  B -->|"No"| D["Use Hyderabad"]
+  C --> E["GET /api/weather"]
+  D --> E
+  E --> G["OpenWeatherMap: current and forecast<br/>in parallel (cached 10 minutes)"]:::io
+  G --> H["Keep one midday reading per day"]
+  H --> I(["Show current weather and 5-day forecast"]):::term
+  I --> J[/"Farmer searches another city"/]:::io
+  J --> E
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+</div>
+<figcaption>Figure 6.14 — Weather page.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/(dashboard)/weather/page.tsx</b> — choosing the location (excerpt)</div><pre><code class="language-typescript">useEffect(() =&gt; {
+  if (typeof navigator !== 'undefined' &amp;&amp; navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) =&gt; load(`lat=${pos.coords.latitude}&amp;lng=${pos.coords.longitude}`),
+      () =&gt; load(`q=${encodeURIComponent(DEFAULT_LOCATION)}`),        // 'Hyderabad,IN'
+      { timeout: 5000 }
+    )
+  } else {
+    load(`q=${encodeURIComponent(DEFAULT_LOCATION)}`)
+  }
+}, [])</code></pre></div>
+
+<h2 data-toc data-key="6.15 Weather Radar">6.15 Weather Radar</h2>
+<div class="feature-meta">
+<div><b>Where</b>Dashboard and farm page</div>
+<div><b>API routes</b><code>/api/weather</code>, <code>/api/weather/tiles/[layer]/[z]/[x]/[y]</code></div>
+<div><b>External services</b>RainViewer (rain), OpenWeatherMap (other layers)</div>
+<div><b>Layers</b>Rain, Clouds, Temperature, Wind, Pressure</div>
+</div>
+<h3>What it does</h3>
+<p>A live map centred on the farm. The <em>Rain</em> layer plays animated radar frames (the past and a short forecast) with play, pause and step buttons. The other layers show coloured OpenWeatherMap maps. A panel shows the current value for the chosen layer and refreshes every 10 minutes; a sweep animation can be switched off.</p>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Radar shown for a farm"]):::term --> B["Load RainViewer frame list"]:::io
+  A --> C["GET /api/weather for current readings;<br/>repeat every 10 minutes"]
+  B --> D{"Layer chosen?"}:::dec
+  D -->|"Rain"| E["Play radar frames every 650 ms;<br/>play, pause, step"]
+  D -->|"Clouds, Temp, Wind, Pressure"| F["Load tiles through the server proxy"]
+  F --> G{"Layer and tile numbers allowed?"}:::dec
+  G -->|"No"| G1["Tile refused"]:::err
+  G -->|"Yes"| H["Server adds the key, fetches the tile"]:::io
+  E --> I(["Map with readout panel"]):::term
+  H --> I
+  C --> I
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+</div>
+<figcaption>Figure 6.15 — Weather radar layers.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/api/weather/tiles/[layer]/[z]/[x]/[y]/route.ts</b> — tile proxy keeps the key secret (excerpt)</div><pre><code class="language-typescript">const LAYERS = new Set(['clouds_new', 'temp_new', 'wind_new', 'pressure_new', 'precipitation_new'])
+const INT = /^\d{1,7}$/
+
+// Strict whitelist / numeric checks: nothing user-controlled reaches the upstream URL unvalidated.
+if (!LAYERS.has(layer) || !INT.test(z) || !INT.test(x) || !INT.test(y) || Number(z) &gt; 18) {
+  return NextResponse.json({ error: 'Invalid tile' }, { status: 400 })
+}
+const upstream = await fetch(`https://tile.openweathermap.org/map/${layer}/${z}/${x}/${y}.png?appid=${apiKey}`,
+                             { next: { revalidate: 600 } })
+return new NextResponse(upstream.body, {
+  headers: { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=600' },
+})</code></pre></div>
+
+<h2 data-toc data-key="6.16 Mandi (Market) Prices">6.16 Mandi (Market) Prices</h2>
+<div class="feature-meta">
+<div><b>Page</b><code>/market</code></div>
+<div><b>API route</b><code>GET /api/market?commodity&amp;state&amp;market&amp;limit</code></div>
+<div><b>External service</b>data.gov.in Agmarknet (cached 30 minutes)</div>
+<div><b>Quick picks</b>Rice, Wheat, Tomato, Onion, Potato, Cotton, Maize, Soybean</div>
+</div>
+<h3>What it does</h3>
+<p>Shows today's government mandi prices. The farmer taps a commodity (or types one), optionally chooses a state (Andhra Pradesh, Telangana, Karnataka, Tamil Nadu, Maharashtra, Gujarat, Punjab, Haryana, Uttar Pradesh, West Bengal) or market. The page shows summary cards (number of markets, average modal price, lowest and highest), a price distribution chart, the best markets to sell in, and a table of every market with minimum, maximum and modal price in rupees.</p>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens Market Prices"]):::term --> B[/"Choose commodity, state, market"/]:::io
+  B --> C["GET /api/market"]
+  C --> D{"Key configured?"}:::dec
+  D -->|"No"| D1["Show setup message"]:::err
+  D -->|"Yes"| E["data.gov.in Agmarknet dataset<br/>with filters"]:::io
+  E --> F["Read modal prices; calculate<br/>average, lowest, highest"]
+  F --> G(["Summary cards, price chart,<br/>best markets, full table"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+</div>
+<figcaption>Figure 6.16 — Mandi prices.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/(dashboard)/market/page.tsx</b> — price summary (excerpt)</div><pre><code class="language-typescript">const stats = (() =&gt; {
+  if (!data?.records?.length) return null
+  const modals = data.records.map((r) =&gt; parseNum(r.modal_price)).filter((v): v is number =&gt; v !== null)
+  if (!modals.length) return null
+  const avg = modals.reduce((a, b) =&gt; a + b, 0) / modals.length
+  const min = Math.min(...modals)
+  const max = Math.max(...modals)
+  return { avg, min, max, samples: modals.length }
+})()</code></pre></div>
+
+<h2 data-toc data-key="6.17 Community Forum">6.17 Community Forum</h2>
+<div class="feature-meta">
+<div><b>Pages</b><code>/community</code>, <code>/community/new</code>, <code>/community/[id]</code></div>
+<div><b>API routes</b><code>/api/community</code>, <code>/api/community/[id]</code>, <code>/api/community/[id]/replies</code></div>
+<div><b>Database</b><code>community_posts</code>, <code>community_replies</code></div>
+<div><b>External services</b>Text AI chain; Supabase secret key (server only)</div>
+</div>
+<h3>What it does</h3>
+<p>Farmers ask questions with crop tags, read others' posts (search and tag filter, newest 100, with reply counts), reply, and delete their own posts. With <em>Ask AI</em> ticked, "AgriDoctor AI" adds a practical answer of 4–7 bullet points. Author names come from the database, so nobody can post under another name, and ordinary users cannot create AI-labelled replies.</p>
+<h3>Step by step</h3>
+<ol>
+<li><em>New post</em> → title, question, tags, <em>Ask AI</em> (on by default) → <code>POST /api/community</code>. The database stamps the author's name.</li>
+<li>If <em>Ask AI</em> is on, the app posts a short reply requesting AI guidance.</li>
+<li>The server checks that the secret key is configured, that the post has fewer than 3 AI replies, and that the farmer has not asked for more than 5 AI replies in 10 minutes.</li>
+<li>The text AI chain writes the answer, which is saved with the server's secret key as "AgriDoctor AI". If the AI is skipped, the farmer sees the reason.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer posts a question or reply"]):::term --> B[("Save post or reply;<br/>database stamps author name")]:::store
+  B --> C{"Ask AI ticked?"}:::dec
+  C -->|"No"| Y(["Post shown"]):::term
+  C -->|"Yes"| Z(["Continues in part 2"]):::conn
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.17a — Community post, part 1 of 2. Continues in part 2.</figcaption>
+</figure>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  Z(["From part 1"]):::conn --> D{"Secret key set, post under 3 AI replies,<br/>farmer under 5 AI requests in 10 min?"}:::dec
+  D -->|"No"| D1["Show the reason: not configured,<br/>already answered, or try later"]:::err
+  D -->|"Yes"| G["Text AI chain writes 4-7 bullet points"]:::io
+  G --> H[("Save as AgriDoctor AI<br/>with the server-only key")]:::store
+  H --> Y(["AI answer shown under the post"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.17b — Community post, part 2 of 2: the guarded AI reply.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/api/community/[id]/replies/route.ts</b> — guarding AI replies (excerpt)</div><pre><code class="language-typescript">const admin = getAdminClient()                          // server-only secret key
+if (!admin) {
+  aiSkipped = 'AI replies are not configured on this server.'
+} else if ((aiCount ?? 0) &gt;= MAX_AI_REPLIES_PER_POST) aiSkipped = 'AI has already answered this post.'
+else if (!checkRateLimit('communityAi', user.id).ok) aiSkipped = 'AI reply limit reached — please try again in a few minutes.'
+else if (post) {
+  const aiContent = await generateAiReply(post.title, post.body, post.tags || [])
+  if (aiContent) {
+    const { error: aiErr } = await admin
+      .from('community_replies')
+      .insert({ post_id: params.id, user_id: null, is_ai: true, content: aiContent })
+    if (aiErr) console.error('[community/ai] insert failed:', aiErr.message)
+  } else aiSkipped = 'AI is busy right now — please try again later.'
+}</code></pre></div>
+
+<h2 data-toc data-key="6.18 AI Engine Status Page">6.18 AI Engine Status Page</h2>
+<div class="feature-meta">
+<div><b>Page</b><code>/ai-status</code> (menu: AI Engine)</div>
+<div><b>API route</b><code>/api/ai/status</code> (GET health, POST live test)</div>
+<div><b>Refresh</b>Every 10 seconds</div>
+<div><b>Limit</b>20 live tests per minute per farmer</div>
+</div>
+<h3>What it does</h3>
+<p>Shows both AI chains as a row of models, each marked <em>Ready</em>, <em>Cooling down</em> (with seconds left) or <em>Key not set</em>. A <strong>live failover test</strong> sends a real prompt through the text chain; the <em>Simulate outage</em> switch (no outage, 1, 2 or 3 models down) makes the first models fail on purpose — without any network call and without affecting real health — so the automatic fallback can be shown live. A table lists recent AI requests: time, feature, model that answered, response time and number of failovers.</p>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens AI Engine"]):::term --> B["GET /api/ai/status every 10 seconds"]
+  B --> C["Show each model: Ready, Cooling down or Key not set"]
+  C --> D[/"Choose: no outage, 1, 2 or 3 models down"/]:::io
+  D --> E["Press Run live test"]
+  E --> F["Mark the first N models as simulated outages"]
+  F --> G["Send a test prompt through the text chain"]:::io
+  G --> H{"A model answered?"}:::dec
+  H -->|"No"| H1["Show: all providers failed"]:::err
+  H -->|"Yes"| I["Reveal each attempt one by one:<br/>failed or answered, with time"]
+  I --> J(["Show the answering model, total time<br/>and number of failovers"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+</div>
+<figcaption>Figure 6.18 — Live failover test.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/api/ai/status/route.ts</b> — running the live test (simplified excerpt)</div><pre><code class="language-typescript">const simulate = Math.max(0, Math.min(TEXT_CHAIN.length - 1, Math.floor(Number(body.simulate) || 0)))
+const simulateFailures = new Set(TEXT_CHAIN.slice(0, simulate).map(stepKey))
+
+const r = await aiGenerate(
+  { messages: [{ role: 'user', content: 'Reply with one short sentence confirming you are online and ready to help Indian farmers.' }] },
+  { label: 'live-test', maxTokens: 60, temperature: 0.3, simulateFailures, attemptTimeoutMs: 20_000 }
+)
+return NextResponse.json({ ok: true, text: r.text, model: r.model, latencyMs: r.latencyMs, attempts: r.attempts })</code></pre></div>

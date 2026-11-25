@@ -1,0 +1,124 @@
+<h1 class="chapter" data-key="Chapter 4 System Architecture"><span class="num">Chapter 4</span><span class="title">System Architecture</span></h1>
+<div class="chapter-rule"></div>
+<p>TheAgriDoctor has three tiers: the farmer's <strong>browser</strong>, the <strong>Next.js server</strong> hosted on Vercel, and the <strong>services</strong> behind it (Supabase, AI providers and data providers). The browser never talks to a service that needs a secret key; only the server does.</p>
+
+<h2 data-toc data-key="4.1 High-level architecture">4.1 High-level architecture</h2>
+<figure class="flow">
+<div class="mermaid">
+flowchart TB
+  U(["Farmer on phone or laptop"]):::term --> B["Browser app<br/>React pages, maps, voice input,<br/>photo compression"]
+  B -->|"public tiles"| T["Map tiles and<br/>RainViewer radar"]:::io
+  B -->|"HTTPS /api requests"| S["Next.js server on Vercel<br/>server-rendered pages · 24 API routes<br/>rate limits · validation · image proxies"]
+  B -->|"login, photo upload"| SB
+  S --> G["AI gateway (src/lib/ai.ts)<br/>fallback chain, timeouts"]:::key
+  S -->|"queries as the user"| SB[("Supabase<br/>Auth · PostgreSQL · Storage")]:::store
+  S -->|"server-only keys"| DS["Data providers<br/>OpenWeatherMap · Agro Monitoring<br/>data.gov.in"]:::io
+  G -->|"1st choice"| OR["OpenRouter<br/>5 free models"]:::io
+  G -->|"backup"| GM["Google Gemini<br/>2 models"]:::io
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef key fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+</div>
+<figcaption>Figure 4.1 — High-level architecture. Every secret key is used only inside the Next.js server.</figcaption>
+</figure>
+<table>
+<thead><tr><th style="width:22%">Tier</th><th>Responsibility</th></tr></thead>
+<tbody>
+<tr><td>Browser</td><td>Shows pages, maps and charts; captures photos and voice; compresses photos; streams chat answers. Holds only the public Supabase key.</td></tr>
+<tr><td>Next.js server</td><td>Checks the user's session, validates input, applies rate limits, calls AI and data providers with secret keys, writes to the database.</td></tr>
+<tr><td>Supabase</td><td>Stores all data in PostgreSQL with row-level security, handles login, stores photos privately.</td></tr>
+<tr><td>AI providers</td><td>Generate diagnoses, advice, task plans and forum answers.</td></tr>
+<tr><td>Data providers</td><td>Weather, satellite field data and market prices.</td></tr>
+</tbody>
+</table>
+
+<h2 data-toc data-key="4.2 How a request flows through the system">4.2 How a request flows through the system</h2>
+<p>Every page visit and every API call passes through the same checks. The middleware refreshes the login session on each request; pages redirect signed-out visitors to the login page; API routes answer <code>401 Unauthorized</code> instead.</p>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Browser sends a request"]):::term --> M["Middleware refreshes the<br/>Supabase session cookie"]
+  M --> Q{"Signed in?"}:::dec
+  Q -->|"No, page request"| L["Redirect to /login?redirect=page"]:::err
+  Q -->|"No, API request"| U["API route answers 401"]:::err
+  Q -->|"Yes"| K{"Page or API?"}:::dec
+  K -->|"Page"| P["Server renders the page with<br/>the user's own data"]
+  K -->|"API"| V["Route validates input<br/>and checks rate limit"]
+  V --> W{"Valid and<br/>within limit?"}:::dec
+  W -->|"No"| E["400 or 429 with a<br/>plain message"]:::err
+  W -->|"Yes"| D["Read or write Supabase,<br/>call AI or data provider"]
+  D --> R(["JSON or streamed response"]):::term
+  P --> R
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+</div>
+<figcaption>Figure 4.2 — Lifecycle of a request.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/lib/supabase/middleware.ts</b> — route protection (excerpt)</div><pre><code class="language-typescript">const PUBLIC_PATHS = ['/login', '/signup', '/auth', '/favicon.ico']
+
+export async function updateSession(request: NextRequest) {
+  // … create a Supabase server client bound to the request cookies …
+  const { data: { user } } = await supabase.auth.getUser()
+
+  const pathname = request.nextUrl.pathname
+  const isPublic = PUBLIC_PATHS.some((p) =&gt; pathname === p || pathname.startsWith(p + '/'))
+  const isApi = pathname.startsWith('/api/')
+
+  if (!user &amp;&amp; !isPublic &amp;&amp; !isApi) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+    url.searchParams.set('redirect', pathname)   // come back here after login
+    return NextResponse.redirect(url)
+  }
+  return response
+}</code></pre></div>
+
+<h2 data-toc data-key="4.3 Project folder structure">4.3 Project folder structure</h2>
+<div class="code"><div class="file"><b>Repository layout</b> (main folders)</div><pre><code class="language-bash">TheAgriDoctor/
+├── src/
+│   ├── app/
+│   │   ├── (dashboard)/          # all signed-in pages
+│   │   │   ├── page.tsx          # dashboard
+│   │   │   ├── diagnose/         # upload, [id] report, history, heatmap, pending
+│   │   │   ├── advisor/          # AI chat
+│   │   │   ├── farms/            # list, new, [id] detail
+│   │   │   ├── weather/  market/  community/  alerts/  profile/
+│   │   │   ├── settings/alerts/  # alert thresholds
+│   │   │   └── ai-status/        # AI Engine status page
+│   │   ├── api/                  # 24 server routes (see Chapter 8)
+│   │   ├── login/  signup/       # public pages
+│   ├── components/               # UI, maps, chat voice input, field monitoring
+│   ├── lib/
+│   │   ├── ai.ts                 # AI gateway: fallback chains, streaming
+│   │   ├── alerts.ts             # 9 field alert rules
+│   │   ├── agro.ts               # Agro Monitoring client
+│   │   ├── crop-tasks.ts         # AI task planner
+│   │   ├── rate-limit.ts  api-error.ts  storage.ts  upload.ts  format.ts
+│   │   └── supabase/             # browser, server, admin clients + middleware
+│   └── middleware.ts
+├── supabase/setup.sql            # complete database setup
+├── supabase/tests/               # 61 database security tests
+├── tests/ai-pipeline.test.mts    # 18 AI pipeline tests
+├── scripts/preview/              # sample-data preview tools
+└── docs/SETUP.md                 # go-live guide</code></pre></div>
+
+<h2 data-toc data-key="4.4 Pages and navigation">4.4 Pages and navigation</h2>
+<p>After login the farmer sees a sidebar (a menu button on phones) with these entries. Each is described in Chapter 6.</p>
+<table>
+<thead><tr><th style="width:26%">Menu item</th><th style="width:24%">Address</th><th>Opens</th></tr></thead>
+<tbody>
+<tr><td>Dashboard</td><td><code>/</code></td><td>Overview of farms, crops, diagnoses, tasks, field health and radar</td></tr>
+<tr><td>AI Diagnosis</td><td><code>/diagnose</code></td><td>Photo upload and disease detection</td></tr>
+<tr><td>Diagnosis History</td><td><code>/diagnose/history</code></td><td>Past reports with filters; link to the heatmap</td></tr>
+<tr><td>AI Advisor</td><td><code>/advisor</code></td><td>Chat with the AI advisor</td></tr>
+<tr><td>Farm Management</td><td><code>/farms</code></td><td>Farms, crop cycles, task planner, field monitoring</td></tr>
+<tr><td>Weather</td><td><code>/weather</code></td><td>Current weather and 5-day forecast</td></tr>
+<tr><td>Market Prices</td><td><code>/market</code></td><td>Mandi prices</td></tr>
+<tr><td>Community</td><td><code>/community</code></td><td>Farmer forum with AI answers</td></tr>
+<tr><td>Alerts</td><td><code>/alerts</code></td><td>Notification centre; thresholds at <code>/settings/alerts</code></td></tr>
+<tr><td>AI Engine</td><td><code>/ai-status</code></td><td>AI model health and live failover test</td></tr>
+<tr><td>Profile</td><td><code>/profile</code></td><td>Name, phone, location, language, sign out</td></tr>
+</tbody>
+</table>

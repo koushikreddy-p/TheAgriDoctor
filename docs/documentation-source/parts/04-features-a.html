@@ -1,0 +1,600 @@
+<h1 class="chapter" data-key="Chapter 6 Features in Detail"><span class="num">Chapter 6</span><span class="title">Features in Detail</span></h1>
+<div class="chapter-rule"></div>
+<p>This chapter describes every feature: what it does, what the farmer clicks, what happens inside the system, a flowchart, and a short excerpt of the real code. The 17 modules are described in 18 sections (voice input has its own section).</p>
+<div class="key"><b>How to read the flowcharts.</b> Green rounded shapes are the start and end. White boxes are steps. Yellow diamonds are decisions (yes / no). Blue shapes are inputs, outputs or calls to an outside service. Purple cylinders are the database. Red boxes are errors shown to the farmer.</div>
+
+<h2 data-toc data-key="6.1 Sign-up, Login and Profile">6.1 Sign-up, Login and Profile</h2>
+<div class="feature-meta">
+<div><b>Pages</b><code>/signup</code>, <code>/login</code>, <code>/profile</code></div>
+<div><b>API routes</b><code>/api/profile</code> (GET, PATCH), <code>/api/auth/signout</code></div>
+<div><b>Database</b><code>users</code> (profile row created by a trigger)</div>
+<div><b>External service</b>Supabase Auth</div>
+</div>
+<h3>What it does</h3>
+<p>Farmers create an account with their name, email and password, log in, and keep a profile with phone number, state, district and preferred answer language (English, Hindi, Telugu, Tamil, Kannada, Marathi, Bengali, Gujarati, Punjabi or Malayalam). The language and location are used by the AI advisor and the task planner.</p>
+<h3>Step by step</h3>
+<ol>
+<li><strong>Sign up:</strong> the farmer enters full name, email and a password of at least 6 characters and presses <em>Sign up</em>. The browser calls Supabase Auth <code>signUp</code> with the name attached.</li>
+<li>A database trigger (<code>handle_new_user</code>) automatically creates the farmer's private row in the <code>users</code> table.</li>
+<li>If the Supabase project requires email confirmation, the page asks the farmer to confirm by email; otherwise the dashboard opens.</li>
+<li><strong>Log in:</strong> email and password → <code>signInWithPassword</code>. The session is kept in a secure cookie. If the farmer had tried to open a page before logging in, they are returned to it.</li>
+<li><strong>Profile:</strong> the farmer edits name, phone, state, district and language and presses <em>Save</em> → <code>PATCH /api/profile</code>. <em>Sign out</em> calls <code>POST /api/auth/signout</code>.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens the app"]):::term --> B{"Has an account?"}:::dec
+  B -->|"No"| C[/"Enter name, email and a password<br/>of at least 6 characters"/]:::io
+  C --> E["Supabase Auth signUp"]:::io
+  E --> F[("Trigger creates profile row in users")]:::store
+  F --> G{"Email confirmation required?"}:::dec
+  G -->|"Yes"| G1["Ask farmer to confirm by email"]
+  G -->|"No"| K
+  B -->|"Yes"| H[/"Enter email and password"/]:::io
+  H --> I["Supabase Auth signInWithPassword"]:::io
+  I --> J{"Correct?"}:::dec
+  J -->|"No"| J1["Show error message"]:::err
+  J -->|"Yes"| K(["Open the requested page or dashboard"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+</div>
+<figcaption>Figure 6.1 — Sign-up and login.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/signup/page.tsx</b> — creating the account (excerpt)</div><pre><code class="language-typescript">if (password.length &lt; 6) {
+  setError('Password must be at least 6 characters')
+  return
+}
+const { data, error: err } = await supabase.auth.signUp({
+  email,
+  password,
+  options: { data: { full_name: fullName } },     // stored with the login
+})
+if (err) { setError(err.message); return }
+
+// Some Supabase projects require email confirmation; session will be null.
+if (!data.session) { setNeedsConfirm(true); return }
+router.replace('/')</code></pre></div>
+<div class="code"><div class="file"><b>supabase/setup.sql</b> — profile row created automatically (excerpt)</div><pre><code class="language-sql">create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = ''
+as $$
+begin
+  insert into public.users (id, full_name)
+  values (new.id, new.raw_user_meta_data -&gt;&gt; 'full_name')
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();</code></pre></div>
+
+<h2 data-toc data-key="6.2 Dashboard">6.2 Dashboard</h2>
+<div class="feature-meta">
+<div><b>Page</b><code>/</code> (rendered on the server)</div>
+<div><b>Database</b><code>farms</code>, <code>crop_cycles</code>, <code>diagnoses</code>, <code>chat_sessions</code>, <code>users</code>, <code>crop_tasks</code></div>
+<div><b>Uses</b>Field alert rules (6.11), weather radar (6.15)</div>
+<div><b>External service</b>None directly (radar loads its own data)</div>
+</div>
+<h3>What it does</h3>
+<p>The first screen after login. It greets the farmer by name (by Indian time), shows four tiles — Farm Health score, Active Crops, Diagnoses and AI Chats — eight quick-action buttons, the next 14 days of tasks, field-health readings (crop health NDVI, soil moisture, temperature and alert counts) for monitored farms, the five latest diagnoses, a farm summary and a live weather radar.</p>
+<h3>Step by step</h3>
+<ol>
+<li>The server loads, at the same time: number of farms, crop cycles, last five diagnoses, number of chats, the farmer's name and monitored farms.</li>
+<li>It loads pending tasks due in the next 14 days (up to 6).</li>
+<li>It calculates the <strong>Farm Health score</strong>: 100 minus 25 for each open critical diagnosis, 15 for high, 8 for medium and 3 for low, never below 10. With no diagnoses it is 100 if there are active crops.</li>
+<li>For each monitored farm it runs the 9 alert rules on the latest scan and counts warnings and critical alerts.</li>
+<li>The page is sent to the browser already filled in; a loading placeholder shows while this happens.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens the dashboard"]):::term --> B["Show loading placeholder"]
+  B --> C[("Load in parallel: farms, crops, last 5 diagnoses,<br/>chat count, name, monitored farms")]:::store
+  C --> D[("Load pending tasks due in 14 days")]:::store
+  D --> E["Calculate Farm Health score<br/>from open diagnoses"]
+  E --> F{"Any monitored farms?"}:::dec
+  F -->|"Yes"| G["Run 9 alert rules on each latest scan;<br/>count warnings and critical"]
+  F -->|"No"| H["Use any farm with a location for the radar"]
+  G --> I(["Show tiles, quick actions, tasks,<br/>field health, diagnoses, farms, radar"]):::term
+  H --> I
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+</div>
+<figcaption>Figure 6.2 — Loading the dashboard.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/(dashboard)/page.tsx</b> — Farm Health score (excerpt)</div><pre><code class="language-typescript">const healthScore = (() =&gt; {
+  const total = diagnoses?.length ?? 0
+  if (total === 0) return activeCrops &gt; 0 ? 100 : null
+  const criticalWeight = (diagnoses ?? []).reduce((acc, d) =&gt; {
+    if (d.status === 'resolved') return acc
+    switch (d.severity) {
+      case 'critical': return acc + 25
+      case 'high':     return acc + 15
+      case 'medium':   return acc + 8
+      case 'low':      return acc + 3
+      default:         return acc
+    }
+  }, 0)
+  return Math.max(10, 100 - criticalWeight)
+})()</code></pre></div>
+
+<h2 data-toc data-key="6.3 AI Crop Disease Diagnosis">6.3 AI Crop Disease Diagnosis</h2>
+<div class="feature-meta">
+<div><b>Page</b><code>/diagnose</code></div>
+<div><b>API route</b><code>POST /api/diagnose</code></div>
+<div><b>Database / storage</b><code>diagnoses</code>; bucket <code>diagnosis-images</code></div>
+<div><b>External services</b>Vision AI chain: OpenRouter → Google Gemini</div>
+</div>
+<h3>What it does</h3>
+<p>The farmer chooses the crop (Rice, Wheat, Tomato, Potato, Sugarcane, Cotton, Maize, Chili, Onion, Soybean, Groundnut, Mango, Banana, Grapes or Other) and uploads one to five photos. The AI returns a report with: disease name, whether the plant is diseased, confidence (0–100%), affected part, severity (low, medium, high, critical), cause, symptoms, organic treatment, chemical treatment (product, dosage, frequency), prevention tips, estimated yield loss if untreated and the number of days within which to act.</p>
+<h3>Step by step</h3>
+<ol>
+<li>The farmer selects the crop, drags or picks photos, and presses <em>Detect Disease</em>.</li>
+<li><strong>Optimising photos</strong> — each photo is shrunk in the browser to at most 1280 pixels and saved as JPEG (a 3.8 MB test photo became 440 KB). Photos are processed one at a time to save memory on low-cost phones.</li>
+<li><strong>Uploading securely</strong> — the small photos are stored in the farmer's own private folder.</li>
+<li><strong>AI analysis</strong> — the server checks sign-in, the limit of 10 diagnoses per 10 minutes, the 4 MB total size and cleans the crop name, then sends the photos to the vision AI chain asking for a JSON report.</li>
+<li>The report is checked field by field; if a model returns a broken report, a different model is asked.</li>
+<li>The report is saved with the name of the AI model that wrote it, and the report page opens. The screen shows a three-step progress card with a seconds counter; after 10 seconds it explains that backup models are being tried.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens AI Diagnosis"]):::term --> B[/"Select crop and add 1-5 photos"/]:::io
+  B --> C["Press Detect Disease"]
+  C --> D["Shrink each photo to 1280 px JPEG"]
+  D --> E{"Photo readable?"}:::dec
+  E -->|"No"| E1["Show: use a JPG or PNG photo"]:::err
+  E -->|"Yes"| F[("Upload to the farmer's private folder")]:::store
+  F --> G["Send photos, crop and paths to /api/diagnose"]
+  G --> Z(["Continues in part 2"]):::conn
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.3a — AI crop diagnosis, part 1 of 2: in the browser. Continues in part 2.</figcaption>
+</figure>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  Z(["From part 1"]):::conn --> H{"Signed in, within limit,<br/>under 4 MB?"}:::dec
+  H -->|"No"| H1["Show the reason"]:::err
+  H -->|"Yes"| I["Vision AI chain: Gemma 3, Qwen 2.5 VL,<br/>Llama 3.2 Vision, Gemini Flash, Flash-Lite"]:::io
+  I --> K{"Complete, valid report?"}:::dec
+  K -->|"No, another model left"| I
+  K -->|"No models left"| J1["Ask farmer to retry in a minute"]:::err
+  K -->|"Yes"| L[("Save diagnosis with model name")]:::store
+  L --> M{"Saved?"}:::dec
+  M -->|"No"| M1(["Show on the unsaved-result page"]):::term
+  M -->|"Yes"| N(["Open the report page"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.3b — AI crop diagnosis, part 2 of 2: on the server.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/lib/upload.ts</b> — shrinking a photo in the browser (simplified excerpt)</div><pre><code class="language-typescript">export async function compressImage(file: File, maxDim = 1280, quality = 0.82) {
+  const bitmap = await createImageBitmap(file)
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height))
+  const w = Math.round(bitmap.width * scale)
+  const h = Math.round(bitmap.height * scale)
+
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, w, h)
+  bitmap.close()
+
+  const blob = await new Promise&lt;Blob&gt;((resolve, reject) =&gt;
+    canvas.toBlob((b) =&gt; (b ? resolve(b) : reject(new Error('Image encoding failed'))), 'image/jpeg', quality))
+  return { blob, dataUrl: await blobToDataUrl(blob) }
+}</code></pre></div>
+<div class="code"><div class="file"><b>src/app/api/diagnose/route.ts</b> — checking the AI report (simplified excerpt)</div><pre><code class="language-typescript">function validateReport(value: unknown): DiagnosisReport {
+  const r = value as Record&lt;string, unknown&gt;
+  const disease_name = str(r.disease_name)
+  if (!disease_name) throw new Error('missing disease_name')
+  if (r.severity === undefined || r.is_diseased === undefined) throw new Error('missing severity / is_diseased')
+
+  let confidence = Number(r.confidence_pct)
+  if (confidence &gt; 0 &amp;&amp; confidence &lt;= 1) confidence *= 100     // model replied 0.87 instead of 87
+
+  return {
+    disease_name,
+    is_diseased: r.is_diseased === true || r.is_diseased === 'true',
+    confidence_pct: clamp(confidence, 0, 100, 0),
+    severity: SEVERITIES.includes(r.severity) ? r.severity : 'medium',
+    // … symptoms, organic and chemical treatment, prevention, yield loss, urgency_days …
+  }
+}
+
+const result = await aiJson(
+  { system: SYSTEM_PROMPT, messages: [{ role: 'user', content: `Analyze this ${cropType} crop image for diseases.` }],
+    images: imageBase64Array },
+  validateReport,          // a throw here makes aiJson try a different model
+  { label: 'diagnose', chain: VISION_CHAIN, maxTokens: 1500, temperature: 0.1, attemptTimeoutMs: 30_000 })</code></pre></div>
+
+<h2 data-toc data-key="6.4 Diagnosis History and Report">6.4 Diagnosis History and Report</h2>
+<div class="feature-meta">
+<div><b>Pages</b><code>/diagnose/history</code>, <code>/diagnose/[id]</code>, <code>/diagnose/pending</code></div>
+<div><b>Database / storage</b><code>diagnoses</code>; private photo bucket</div>
+<div><b>Filters</b>Crop name, severity, status (open / resolved)</div>
+<div><b>Shows</b>Up to 50 latest reports with a photo thumbnail</div>
+</div>
+<h3>What it does</h3>
+<p>The history page lists the farmer's past diagnoses, newest first, with filters. Opening one shows the full report: severity badge, disease name, affected part, confidence bar, AI model used, estimated yield loss, act-within days, detection date, uploaded photos, root cause, symptoms, organic treatment, chemical treatment cards, prevention tips, an urgent-action banner and a responsible-AI notice.</p>
+<h3>Step by step</h3>
+<ol>
+<li>The server loads the farmer's diagnoses (only their own, enforced by the database).</li>
+<li>Photos are stored privately, so the server creates <strong>fresh signed links</strong> valid for one hour — for the history page, all thumbnails in <strong>one</strong> request.</li>
+<li>If a report could not be saved earlier, the <code>/diagnose/pending</code> page shows it from the browser's memory with a "not saved" notice.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens Diagnosis History"]):::term --> B[/"Optional filters: crop, severity, status"/]:::io
+  B --> C[("Load up to 50 of the farmer's diagnoses")]:::store
+  C --> D["Create signed photo links<br/>for all thumbnails in one request"]
+  D --> E["Show the list"]
+  E --> F{"Farmer opens a report?"}:::dec
+  F -->|"Yes"| G[("Load that diagnosis<br/>only if it belongs to the farmer")]:::store
+  G --> H["Sign its photo links, valid 1 hour"]
+  H --> I(["Show full report with AI safety notice"]):::term
+  F -->|"No"| J(["Stay on list"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+</div>
+<figcaption>Figure 6.4 — Viewing history and a report.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/lib/storage.ts</b> — signing photo links in one call (excerpt)</div><pre><code class="language-typescript">export async function signImageRefs(supabase: SupabaseClient, refs: (string | null | undefined)[], expiresIn = 3600) {
+  const paths = Array.from(new Set(refs.filter((r): r is string =&gt; !!r &amp;&amp; !isUrl(r))))
+  const signed = new Map&lt;string, string&gt;()
+  if (paths.length) {
+    const { data } = await supabase.storage.from(DIAGNOSIS_BUCKET).createSignedUrls(paths, expiresIn)
+    for (const d of data ?? []) if (d.path &amp;&amp; d.signedUrl) signed.set(d.path, d.signedUrl)
+  }
+  return refs.map((r) =&gt; (!r ? null : isUrl(r) ? r : signed.get(r) ?? null))
+}</code></pre></div>
+
+<h2 data-toc data-key="6.5 Disease Heatmap">6.5 Disease Heatmap</h2>
+<div class="feature-meta">
+<div><b>Page</b><code>/diagnose/heatmap</code></div>
+<div><b>API route</b><code>GET /api/diagnose/heatmap?days&amp;crop&amp;scope</code></div>
+<div><b>Database</b>Function <code>disease_heatmap()</code></div>
+<div><b>Filters</b>7 days, 30 days, 90 days, 1 year · crop · everyone or only mine</div>
+</div>
+<h3>What it does</h3>
+<p>A map of disease outbreaks reported by all farmers, so a farmer can see what is spreading nearby. Points are grouped into clusters and coloured by severity, on a street or satellite base map. Privacy is protected: no user ids are returned, and each farm's location is rounded to about 1 km.</p>
+<h3>Step by step</h3>
+<ol>
+<li>The farmer picks a period, an optional crop and the scope.</li>
+<li>The server calls the database function <code>disease_heatmap</code>, which places each diagnosis at its owner's first farm, rounded to 2 decimal places (about 1 km).</li>
+<li>The server adds a small fixed offset (about ±250 m) so points from the same place do not sit exactly on top of each other.</li>
+<li>The map clusters the points; clicking one shows crop, disease, severity and date.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens the heatmap"]):::term --> B[/"Choose period, crop, scope"/]:::io
+  B --> C["GET /api/diagnose/heatmap"]
+  C --> D[("disease_heatmap function:<br/>no user ids, location rounded ~1 km")]:::store
+  D --> E{"Scope is only mine?"}:::dec
+  E -->|"Yes"| F["Keep the farmer's own points"]
+  E -->|"No"| G["Keep all points"]
+  F --> H["Add a small fixed offset to each point"]
+  G --> H
+  H --> I(["Map shows clusters coloured by severity"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+</div>
+<figcaption>Figure 6.5 — Building the disease heatmap.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>supabase/setup.sql</b> — privacy-preserving heatmap function (excerpt)</div><pre><code class="language-sql">create or replace function public.disease_heatmap(p_days integer default 90, p_crop text default null)
+returns table (id uuid, lat double precision, lng double precision, crop_type text,
+               disease_name text, severity text, status text, created_at timestamptz, is_mine boolean)
+language sql stable security definer set search_path = ''
+as $$
+  select d.id,
+         round(f.lat::numeric, 2)::double precision,      -- about 1 km
+         round(f.lng::numeric, 2)::double precision,
+         d.crop_type, d.disease_name, d.severity, d.status, d.created_at,
+         d.user_id = (select auth.uid())
+  from public.diagnoses d
+  join lateral (select fa.lat, fa.lng from public.farms fa
+                where fa.user_id = d.user_id and fa.lat is not null and fa.lng is not null
+                order by fa.created_at limit 1) f on true
+  where (select auth.uid()) is not null
+    and d.created_at &gt;= now() - make_interval(days =&gt; least(greatest(coalesce(p_days, 90), 1), 730))
+  order by d.created_at desc
+  limit 1000;
+$$;</code></pre></div>
+
+<h2 data-toc data-key="6.6 AI Farming Advisor (Chat)">6.6 AI Farming Advisor (Chat)</h2>
+<div class="feature-meta">
+<div><b>Page</b><code>/advisor</code></div>
+<div><b>API routes</b><code>POST /api/chat</code>, <code>/api/chat/sessions</code>, <code>/api/chat/sessions/[id]/messages</code></div>
+<div><b>Database</b><code>chat_sessions</code>, <code>chat_messages</code></div>
+<div><b>External services</b>Text AI chain (streaming): OpenRouter → Google Gemini</div>
+</div>
+<h3>What it does</h3>
+<p>A chat assistant that knows the farmer: their name, district, state, language, farms (area, soil, water source), active crops with growth stage, and latest diagnosis. Answers appear word by word, in the farmer's language, include dosage and timing for any chemical, flag urgent situations, and show which AI model wrote them. Conversations are saved and listed on the left; the first message becomes the conversation title.</p>
+<h3>Step by step</h3>
+<ol>
+<li>The farmer presses <em>New Chat</em> (or opens a saved one) and types, speaks, or taps a suggested question.</li>
+<li>The server checks sign-in, the limit of 20 messages per minute and the message length (up to 4,000 characters).</li>
+<li>At the same time it loads: the conversation, its latest 20 messages, and the farmer's profile, farms, crops and latest diagnosis, and builds a personalised instruction for the AI.</li>
+<li>The question is saved and the text AI chain is asked to stream its answer. If a model fails before its first word, the next model takes over.</li>
+<li>Words appear on screen as they arrive; when the answer ends it is saved with the model name, which is shown under the answer.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens AI Advisor"]):::term --> B[/"Type, speak or tap a suggested question"/]:::io
+  B --> C["POST /api/chat"]
+  C --> D{"Signed in, under 20 per minute,<br/>under 4000 characters?"}:::dec
+  D -->|"No"| D1["Show the reason in the chat"]:::err
+  D -->|"Yes"| E[("Load in parallel: conversation, latest 20<br/>messages, profile, farms, crops, diagnosis")]:::store
+  E --> F["Build personalised instruction:<br/>name, place, language, farms, crop stages"]
+  F --> G[("Save the question")]:::store
+  G --> Z(["Continues in part 2"]):::conn
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.6a — Advisor message, part 1 of 2: preparing the question. Continues in part 2.</figcaption>
+</figure>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  Z(["From part 1"]):::conn --> H["Ask the next model in the text chain to stream:<br/>Nemotron, Llama 3.3, Gemini Flash, Flash-Lite"]:::io
+  H --> I{"First word arrived?"}:::dec
+  I -->|"No"| J{"Another model left?"}:::dec
+  J -->|"Yes"| H
+  J -->|"No"| J1["Show: all AI providers are busy"]:::err
+  I -->|"Yes"| K["Show words as they arrive"]
+  K --> L[("Save answer with model name")]:::store
+  L --> M(["Answer shown with its model name"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.6b — Advisor message, part 2 of 2: streaming the answer.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/api/chat/route.ts</b> — the personalised instruction (excerpt)</div><pre><code class="language-typescript">return `You are AgriDoctor, an expert agricultural advisor for Indian farming.
+
+## Farmer Profile
+- Name: ${farmerName}
+- Location: ${location}
+- Preferred language: ${language}
+
+## Farm Overview
+${farmContext}
+
+## Active Crops
+  ${cropContext}
+
+## Latest Disease Detection
+${diagContext}
+
+## Instructions
+- Respond primarily in ${language}. Match the language the farmer uses.
+- Give practical, specific advice. Reference their actual crop data.
+- When recommending chemicals, always include dosage, frequency, and timing.
+- Flag urgent situations clearly (e.g., "⚠️ Act within 48 hours").
+- Be warm, concise, and use bullet points for lists.`</code></pre></div>
+<div class="code"><div class="file"><b>src/app/(dashboard)/advisor/page.tsx</b> — reading the streamed answer in the browser (excerpt)</div><pre><code class="language-typescript">const answeredBy = res.headers.get('X-AI-Model')      // which model answered
+const reader = res.body!.getReader()
+const decoder = new TextDecoder()
+let accumulated = ''
+while (true) {
+  const { done, value } = await reader.read()
+  if (done) break
+  // stream: true keeps multi-byte characters (Hindi / Telugu) intact across chunk boundaries
+  accumulated += decoder.decode(value, { stream: true })
+  setStreamingContent(accumulated)                    // words appear as they arrive
+}
+accumulated += decoder.decode()</code></pre></div>
+
+<h2 data-toc data-key="6.7 Voice Input">6.7 Voice Input</h2>
+<div class="feature-meta">
+<div><b>Where</b>Microphone button in the advisor</div>
+<div><b>Languages</b>English (en-IN), Hindi (hi-IN), Telugu (te-IN)</div>
+<div><b>Browser API</b>Web Speech API (best in Chrome and Edge)</div>
+<div><b>Saved setting</b>Chosen language remembered on the device</div>
+</div>
+<h3>What it does</h3>
+<p>The farmer taps the microphone and speaks; the words appear in the message box while they speak, and they can edit before sending. A language switch under the box (EN, हिंदी, తెలుగు) selects the speech language.</p>
+<h3>Step by step</h3>
+<ol>
+<li>The farmer picks the speech language (remembered for next time) and taps the microphone.</li>
+<li>The browser's speech recogniser listens continuously and returns partial and final text.</li>
+<li>The text is shown live in the message box, added to anything already typed.</li>
+<li>Tapping the microphone again stops listening; the farmer presses <em>Send</em>.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer taps the microphone"]):::term --> B{"Browser supports speech?"}:::dec
+  B -->|"No"| B1["Microphone button is hidden"]:::err
+  B -->|"Yes"| C["Start recogniser in en-IN, hi-IN or te-IN"]:::io
+  C --> D["Farmer speaks"]
+  D --> E["Partial text appears in the message box"]
+  E --> F{"Farmer taps again or stops?"}:::dec
+  F -->|"No"| D
+  F -->|"Yes"| G["Final text kept in the box"]
+  G --> H(["Farmer edits if needed and presses Send"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+</div>
+<figcaption>Figure 6.7 — Voice input.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/components/advisor/voice-input.tsx</b> — speech recognition (simplified excerpt)</div><pre><code class="language-typescript">const LANG_MAP: Record&lt;string, string&gt; = { English: 'en-IN', Hindi: 'hi-IN', Telugu: 'te-IN' }
+
+const r = new Ctor()                  // window.SpeechRecognition or webkitSpeechRecognition
+r.continuous = true
+r.interimResults = true
+r.lang = (language &amp;&amp; LANG_MAP[language]) || 'en-IN'
+
+r.onresult = (event) =&gt; {
+  let interim = ''
+  for (let i = event.resultIndex; i &lt; event.results.length; i++) {
+    const res = event.results[i]
+    const txt = res[0].transcript
+    if (res.isFinal) finalBufRef.current += (finalBufRef.current ? ' ' : '') + txt
+    else interim += txt
+  }
+  if (onInterim) onInterim((finalBufRef.current + ' ' + interim).trim())   // live text in the box
+}
+r.start()</code></pre></div>
+
+<h2 data-toc data-key="6.8 Farms and Crop Cycles">6.8 Farms and Crop Cycles</h2>
+<div class="feature-meta">
+<div><b>Pages</b><code>/farms</code>, <code>/farms/new</code>, <code>/farms/[id]</code></div>
+<div><b>API routes</b><code>/api/farms</code>, <code>/api/farms/[id]</code>, <code>/api/farms/[id]/crops</code></div>
+<div><b>Database</b><code>farms</code>, <code>crop_cycles</code></div>
+<div><b>External service</b>None</div>
+</div>
+<h3>What it does</h3>
+<p>A farmer can register several farms with a name, area in acres, soil type (Loamy, Clay, Sandy, Black, Red, Silty, Other), water source (Canal, Borewell, Rainwater, Drip Irrigation, River, Pond, Tank, Other) and GPS latitude and longitude. On each farm they add crop cycles with crop name, variety, sowing date, expected harvest date and growth stage (seedling, vegetative, flowering, fruiting, harvest, harvested). A farm can be deleted, which also deletes its crops and tasks.</p>
+<h3>Step by step</h3>
+<ol>
+<li><em>Add Farm</em> → fill the form → <code>POST /api/farms</code>; empty fields are stored as empty, numbers are checked.</li>
+<li>The farm page opens: details, crop cycles, task planner for each crop and field monitoring.</li>
+<li><em>Add crop</em> → form → <code>POST /api/farms/[id]/crops</code>; the stage starts as seedling and status as active.</li>
+<li>Editing a farm accepts only six fields (name, area, latitude, longitude, soil, water), so internal fields cannot be changed.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer opens Farm Management"]):::term --> B{"Add a new farm?"}:::dec
+  B -->|"Yes"| C[/"Name, acres, soil, water source, latitude, longitude"/]:::io
+  C --> E[("Save farm for this farmer<br/>(name is required)")]:::store
+  E --> F["Open the farm page"]
+  B -->|"No"| F
+  F --> G{"Add a crop?"}:::dec
+  G -->|"Yes"| H[/"Crop, variety, sowing date, harvest date, stage"/]:::io
+  H --> I[("Save crop cycle as active")]:::store
+  I --> J(["Crop listed with its task planner"]):::term
+  G -->|"No"| J
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+</div>
+<figcaption>Figure 6.8 — Adding a farm and a crop.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/app/api/farms/route.ts</b> — creating a farm (excerpt)</div><pre><code class="language-typescript">const { name, total_area_acres, lat, lng, soil_type, water_source } = body
+if (!name) return NextResponse.json({ error: 'Farm name is required' }, { status: 400 })
+
+const toNumOrNull = (v: unknown) =&gt; {
+  if (v === '' || v === null || v === undefined) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+const { data, error } = await supabase.from('farms').insert({
+  user_id: user.id,
+  name: name.trim(),
+  total_area_acres: toNumOrNull(total_area_acres),
+  lat: toNumOrNull(lat),
+  lng: toNumOrNull(lng),
+  soil_type: toNullIfBlank(soil_type),
+  water_source: toNullIfBlank(water_source),
+}).select('*').single()</code></pre></div>
+
+<h2 data-toc data-key="6.9 AI Task Planner">6.9 AI Task Planner</h2>
+<div class="feature-meta">
+<div><b>Where</b>Under each crop on the farm page</div>
+<div><b>API routes</b><code>POST /api/crops/[id]/tasks/generate</code>, <code>/api/crops/[id]/tasks</code>, <code>/api/tasks/[id]</code></div>
+<div><b>Database</b><code>crop_tasks</code></div>
+<div><b>External services</b>Text AI chain (JSON answers)</div>
+</div>
+<h3>What it does</h3>
+<p>For each crop, the AI writes a prioritised checklist of 4–6 tasks for the next 14 days, each with a title, a short description, a category (irrigation, fertilization, pest, weeding, monitoring, harvest, other), a priority (low, medium, high) and a due date. The plan uses the crop, variety, stage, sowing and harvest dates, soil, water source, the farmer's district and state, and is written in the farmer's language. Farmers can also add tasks by hand, tick them done or skipped, and delete them.</p>
+<h3>Step by step</h3>
+<ol>
+<li>The farmer presses <em>Generate with AI</em> (adds tasks) or <em>Regenerate</em> (replaces pending AI tasks).</li>
+<li>The server checks the limit of 10 generations per 10 minutes, then loads the crop, its farm and the farmer's location and language.</li>
+<li>The text AI chain is asked for JSON. Every task is checked: unknown categories become "other", unknown priorities become "medium", due days are kept between 0 and 30. A broken answer is retried on a different model.</li>
+<li>Tasks are saved with real due dates and shown sorted by date.</li>
+</ol>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  A(["Farmer presses Generate with AI"]):::term --> B{"Within 10 per 10 minutes?"}:::dec
+  B -->|"No"| B1["Show: please wait"]:::err
+  B -->|"Yes"| C[("Load crop, farm soil and water,<br/>farmer's location and language")]:::store
+  C --> D["Text AI chain asked for a JSON task list"]:::io
+  D --> E{"Valid task list?"}:::dec
+  E -->|"No"| F{"Another model left?"}:::dec
+  F -->|"Yes"| D
+  F -->|"No"| F1["Show: could not generate tasks"]:::err
+  E -->|"Yes"| Z(["Continues in part 2"]):::conn
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.9a — AI task plan, part 1 of 2: asking the AI. Continues in part 2.</figcaption>
+</figure>
+<figure class="flow">
+<div class="mermaid">
+flowchart TD
+  Z(["From part 1"]):::conn --> G["Clean each task: category, priority,<br/>due day 0-30, sort by date"]
+  G --> H{"Regenerate chosen?"}:::dec
+  H -->|"Yes"| I[("Delete pending AI tasks of this crop")]:::store
+  H -->|"No"| J
+  I --> J[("Save new tasks with due dates")]:::store
+  J --> K(["Checklist shown; farmer ticks tasks off"]):::term
+  classDef term fill:#2F7A4F,stroke:#1F5A39,color:#ffffff
+  classDef dec fill:#FFF5DB,stroke:#C98A12,color:#3A2A00
+  classDef io fill:#EEF3FB,stroke:#4A6FA5,color:#1B2A44
+  classDef store fill:#F1EEF8,stroke:#6E59A5,color:#2A1F45
+  classDef err fill:#FDECEC,stroke:#C0392B,color:#5A1010
+  classDef conn fill:#12291F,stroke:#12291F,color:#ffffff
+</div>
+<figcaption>Figure 6.9b — AI task plan, part 2 of 2: saving the tasks.</figcaption>
+</figure>
+<div class="code"><div class="file"><b>src/lib/crop-tasks.ts</b> — checking and cleaning the AI's tasks (simplified excerpt)</div><pre><code class="language-typescript">const validate = (value: unknown): GeneratedTask[] =&gt; {
+  const tasks = (value as { tasks?: unknown })?.tasks
+  if (!Array.isArray(tasks)) throw new Error('missing "tasks" array')
+  const out: GeneratedTask[] = []
+  for (const t of tasks) {
+    const r = t as Record&lt;string, unknown&gt;
+    const title = typeof r.title === 'string' ? r.title.trim().slice(0, 120) : ''
+    if (!title) continue
+    const category = CATS.includes(r.category) ? r.category : 'other'
+    const priority = PRI.includes(r.priority) ? r.priority : 'medium'
+    const rawDue = Number(r.due_offset_days)
+    const due_offset_days = Number.isFinite(rawDue) ? Math.max(0, Math.min(30, Math.round(rawDue))) : 0
+    out.push({ title, description: String(r.description ?? '').slice(0, 400), category, priority, due_offset_days })
+  }
+  if (out.length === 0) throw new Error('no valid tasks')
+  return out.sort((a, b) =&gt; a.due_offset_days - b.due_offset_days).slice(0, 8)
+}
+
+const { data } = await aiJson({ system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userMsg }] },
+                              validate, { label: 'crop-tasks', maxTokens: 1500, temperature: 0.35 })</code></pre></div>
