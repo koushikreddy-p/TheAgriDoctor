@@ -27,5 +27,6 @@ export type Diagnosis = {
   severity: 'low' | 'medium' | 'high' | 'critical' | null
   full_report_json: DiagnosisReport | null
   status: 'open' | 'resolved'
+  ai_model?: string | null
   created_at: string
 }

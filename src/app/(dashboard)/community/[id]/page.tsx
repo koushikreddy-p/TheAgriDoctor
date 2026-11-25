@@ -52,6 +52,7 @@ export default function PostDetailPage() {
   const [input, setInput] = useState('')
   const [posting, setPosting] = useState(false)
   const [requestAi, setRequestAi] = useState(true)
+  const [notice, setNotice] = useState<{ tone: 'info' | 'error'; text: string } | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -75,16 +76,23 @@ export default function PostDetailPage() {
     e.preventDefault()
     if (!input.trim() || posting) return
     setPosting(true)
+    setNotice(null)
     try {
       const res = await fetch(`/api/community/${id}/replies`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: input.trim(), request_ai: requestAi }),
       })
+      const j = await res.json().catch(() => ({}))
       if (res.ok) {
         setInput('')
+        if (j.ai_skipped) setNotice({ tone: 'info', text: j.ai_skipped })
         await load()
+      } else {
+        setNotice({ tone: 'error', text: j.error || 'Could not post your reply. Please try again.' })
       }
+    } catch {
+      setNotice({ tone: 'error', text: 'Network error — please check your connection and try again.' })
     } finally {
       setPosting(false)
     }
@@ -196,6 +204,11 @@ export default function PostDetailPage() {
       <Card>
         <CardContent className="p-4">
           <form onSubmit={submitReply} className="space-y-3">
+            {notice && (
+              <p role="status" className={`text-xs rounded-md px-3 py-2 ${notice.tone === 'error' ? 'bg-red-50 text-red-700' : 'bg-sky-50 text-sky-800'}`}>
+                {notice.text}
+              </p>
+            )}
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}

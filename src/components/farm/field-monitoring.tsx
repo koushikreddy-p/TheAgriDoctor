@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { PolygonMap } from './polygon-map'
 import { computeAlerts, alertToneClasses, type MonitorSnapshot } from '@/lib/alerts'
+import { formatDate, formatDateTime } from '@/lib/format'
 
 type Snapshot = {
   scanned_at: string
@@ -60,7 +61,7 @@ function formatTime(iso?: string | null) {
   if (mins < 60) return `${mins}m ago`
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
-  return new Date(iso).toLocaleString()
+  return formatDateTime(iso)
 }
 
 function ndviColor(mean?: number): string {
@@ -410,7 +411,7 @@ export function FieldMonitoring({ farmId, farmLat, farmLng }: { farmId: string; 
                   <span className="text-sm text-slate-600">{ndviLabel(snap.ndvi.stats?.mean)}</span>
                 </div>
                 <div className="text-xs text-slate-500">
-                  {snap.ndvi.image.type} · captured {new Date(snap.ndvi.image.dt * 1000).toLocaleDateString()} · cloud {snap.ndvi.image.cl.toFixed(1)}%
+                  {snap.ndvi.image.type} · captured {formatDate(snap.ndvi.image.dt * 1000)} · cloud {snap.ndvi.image.cl.toFixed(1)}%
                 </div>
                 {snap.ndvi.stats && (
                   <div className="grid grid-cols-3 gap-2 text-[11px] text-slate-500">

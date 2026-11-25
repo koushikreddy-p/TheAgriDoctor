@@ -165,6 +165,28 @@ await test('missing API key → provider skipped without a network call', async 
   process.env.OPENROUTER_API_KEY = 'or-key'
 })
 
+await test('simulated outage: first 2 models fail without network calls, 3rd answers', async () => {
+  const chain = [{ provider: 'openrouter' as const, model: 'sim1' }, { provider: 'openrouter' as const, model: 'sim2' }, { provider: 'gemini' as const, model: 'sim3' }]
+  handler = async () => gmOk('online')
+  const r = await ai.aiGenerate({ messages: [{ role: 'user', content: 'hi' }] }, { chain, simulateFailures: new Set(['openrouter:sim1', 'openrouter:sim2']) })
+  assert.equal(r.model, 'sim3'); assert.equal(calls.length, 1, 'no network call for simulated failures')
+  assert.equal(r.attempts[0].status, 503); assert.match(r.attempts[0].error ?? '', /simulated/)
+})
+
+await test('simulated outage does NOT mark models unhealthy (no cool-down)', async () => {
+  const chain = [{ provider: 'openrouter' as const, model: 'sim1' }, { provider: 'openrouter' as const, model: 'sim2' }, { provider: 'gemini' as const, model: 'sim3' }]
+  const health = ai.getChainHealth(chain)
+  assert.ok(health.every((h) => h.coolingDownMs === 0)); assert.ok(health.every((h) => h.keyConfigured))
+  handler = async () => orOk('real')
+  const r = await ai.aiGenerate({ messages: [{ role: 'user', content: 'hi' }] }, { chain })
+  assert.equal(r.model, 'sim1', 'first model still tried first after a simulation')
+})
+
+await test('recent-request log records outcome and model', async () => {
+  const log = ai.getRecentRequests()
+  assert.ok(log.length > 0); assert.equal(log[0].ok, true); assert.equal(log[0].model, 'sim1')
+})
+
 process.stdout.write(results.join('\n') + '\n')
 
 // ─── Rate limiter ──────────────────────────────────────────────────────────────

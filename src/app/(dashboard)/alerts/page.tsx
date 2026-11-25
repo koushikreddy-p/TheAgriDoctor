@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { formatDateTime } from '@/lib/format'
 
 type Notif = {
   id: string
@@ -325,7 +326,7 @@ export default function AlertsPage() {
                     <div className="flex items-center gap-3 text-[11px] text-slate-400 mt-1.5">
                       <span>{timeAgo(n.created_at)}</span>
                       <span>·</span>
-                      <span>{new Date(n.created_at).toLocaleString()}</span>
+                      <span>{formatDateTime(n.created_at)}</span>
                       {farmId && (
                         <>
                           <span>·</span>

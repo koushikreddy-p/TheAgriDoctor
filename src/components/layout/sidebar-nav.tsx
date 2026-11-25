@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Trees, Sprout, Cloud, LayoutDashboard, MessageCircle, BarChart3, Users, History, Settings, X, Bell } from 'lucide-react'
+import { Trees, Sprout, Cloud, LayoutDashboard, MessageCircle, BarChart3, Users, History, Settings, X, Bell, Cpu } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const navItems = [
@@ -15,6 +15,7 @@ const navItems = [
   { name: 'Market Prices', href: '/market', icon: BarChart3 },
   { name: 'Community', href: '/community', icon: Users },
   { name: 'Alerts', href: '/alerts', icon: Bell },
+  { name: 'AI Engine', href: '/ai-status', icon: Cpu },
   { name: 'Profile', href: '/profile', icon: Settings },
 ]
 
@@ -29,10 +30,10 @@ export function SidebarNav({
 }) {
   const pathname = usePathname()
 
-  const isActive = (href: string) => {
-    if (href === '/') return pathname === '/'
-    return pathname === href || pathname.startsWith(href + '/')
-  }
+  // Highlight only the most specific matching item (e.g. /diagnose/history ≠ /diagnose).
+  const matches = (href: string) => (href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(href + '/'))
+  const activeHref = navItems.map((i) => i.href).filter(matches).sort((a, b) => b.length - a.length)[0]
+  const isActive = (href: string) => href === activeHref
 
   return (
     <aside

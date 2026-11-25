@@ -1,12 +1,16 @@
 'use client'
 
+import Link from 'next/link'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Send, Plus, MessageSquare, Sprout, Loader2, Menu } from 'lucide-react'
+import { Send, Plus, MessageSquare, Sprout, Loader2, Menu, Cpu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { modelName } from '@/lib/ai-models'
+import { AiNotice } from '@/components/ai-notice'
 import { Markdown } from '@/components/ui/markdown'
 import { VoiceInput } from '@/components/advisor/voice-input'
 import type { ChatSession, ChatMessage } from '@/types/chat'
 import { useChatStore } from '@/lib/store'
+import { formatDate } from '@/lib/format'
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === 'user'
@@ -25,6 +29,11 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
         }`}
       >
         {isUser ? msg.content : <Markdown content={msg.content} compact />}
+        {!isUser && msg.model && (
+          <p className="mt-2 pt-2 border-t border-slate-100 text-[11px] text-slate-400 flex items-center gap-1">
+            <Cpu className="w-3 h-3" /> via {modelName(msg.model)}
+          </p>
+        )}
       </div>
     </div>
   )
@@ -157,6 +166,7 @@ export default function AdvisorPage() {
         throw new Error(err.error || 'Failed to send')
       }
 
+      const answeredBy = res.headers.get('X-AI-Model')
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
       let accumulated = ''
@@ -179,6 +189,7 @@ export default function AdvisorPage() {
           session_id: sessionId,
           role: 'assistant',
           content: accumulated,
+          model: answeredBy,
           created_at: new Date().toISOString(),
         }
         setMessages(prev => [...prev, aiMsg])
@@ -274,7 +285,7 @@ export default function AdvisorPage() {
                     {session.title}
                   </p>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    {new Date(session.created_at).toLocaleDateString()}
+                    {formatDate(session.created_at)}
                   </p>
                 </div>
               </button>
@@ -300,7 +311,9 @@ export default function AdvisorPage() {
           </div>
           <div>
             <p className="text-sm font-semibold text-slate-800">AgriDoctor AI Advisor</p>
-            <p className="text-xs text-emerald-600">Powered by LLaMA 3.3</p>
+            <Link href="/ai-status" className="text-xs text-emerald-600 hover:underline">
+              Multi-model AI · automatic failover
+            </Link>
           </div>
         </div>
 
@@ -366,7 +379,7 @@ export default function AdvisorPage() {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask about your crops, disease treatment, irrigation timing…"
+                placeholder="Ask about crops, diseases, irrigation…"
                 rows={1}
                 className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 pr-4 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition-all max-h-32"
                 style={{ minHeight: '48px' }}
@@ -404,7 +417,8 @@ export default function AdvisorPage() {
               )}
             </Button>
           </div>
-          <p className="text-center text-xs text-slate-400 mt-2">Press Enter to send · Shift+Enter for new line · Tap the mic to speak</p>
+          <p className="text-center text-xs text-slate-400 mt-2 hidden sm:block">Press Enter to send · Shift+Enter for new line · Tap the mic to speak</p>
+          <AiNotice compact className="mt-1" />
           {/* Voice language picker */}
           <div className="flex items-center justify-center gap-1.5 mt-1.5">
             <span className="text-[10px] text-slate-400 uppercase tracking-wide">Mic language:</span>

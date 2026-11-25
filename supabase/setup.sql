@@ -88,6 +88,7 @@ create table if not exists public.diagnoses (
   severity         text check (severity in ('low','medium','high','critical')),
   full_report_json jsonb,
   status           text not null default 'open' check (status in ('open','resolved')),
+  ai_model         text,  -- which AI vision model produced the report
   created_at       timestamptz not null default now()
 );
 
@@ -104,6 +105,7 @@ create table if not exists public.chat_messages (
   session_id uuid not null references public.chat_sessions(id) on delete cascade,
   role       text not null check (role in ('user','assistant')),
   content    text not null,
+  model      text,  -- which AI model wrote an assistant reply (shown as "via …")
   created_at timestamptz not null default now()
 );
 
@@ -146,6 +148,10 @@ create table if not exists public.notifications (
   read_at    timestamptz,
   created_at timestamptz not null default now()
 );
+
+-- Columns added after the first release (no-ops on a fresh database).
+alter table public.chat_messages add column if not exists model text;
+alter table public.diagnoses     add column if not exists ai_model text;
 
 -- ─── Indexes (every foreign key + the app's hot queries) ─────────────────────
 create index if not exists idx_farms_user            on public.farms(user_id, created_at);

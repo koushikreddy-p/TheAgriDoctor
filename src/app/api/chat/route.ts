@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { aiStream, AiChainError } from '@/lib/ai'
 import { rateLimitResponse } from '@/lib/rate-limit'
+import { formatDate } from '@/lib/format'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 // Allow enough time for the fallback chain (OpenRouter → Gemini) plus streaming.
@@ -48,7 +49,7 @@ async function buildSystemPrompt(supabase: SupabaseClient, userId: string): Prom
       .join('\n') || 'No farms registered'
 
   const diagContext = lastDiag
-    ? `${lastDiag.disease_name ?? 'Unknown'} on ${lastDiag.crop_type} (${lastDiag.severity} severity, ${new Date(lastDiag.created_at).toLocaleDateString()})`
+    ? `${lastDiag.disease_name ?? 'Unknown'} on ${lastDiag.crop_type} (${lastDiag.severity} severity, ${formatDate(lastDiag.created_at)})`
     : 'No recent diagnoses'
 
   return `You are AgriDoctor, an expert agricultural advisor for Indian farming.
@@ -130,7 +131,7 @@ export async function POST(req: NextRequest) {
     // Persist the assistant reply once the stream finishes (or the client disconnects).
     const persisted = ai.done.then(async ({ text }) => {
       if (text.trim()) {
-        await supabase.from('chat_messages').insert({ session_id: sessionId, role: 'assistant', content: text })
+        await supabase.from('chat_messages').insert({ session_id: sessionId, role: 'assistant', content: text, model: ai.model })
       }
     })
 

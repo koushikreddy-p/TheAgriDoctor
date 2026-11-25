@@ -6,6 +6,7 @@ import { Plus, Search, MessageSquare, ThumbsUp, Loader2, Sparkles, Users as User
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { formatDate } from '@/lib/format'
 
 type Post = {
   id: string
@@ -31,7 +32,7 @@ function timeAgo(iso: string): string {
   if (hr < 24) return `${hr}h ago`
   const d = Math.floor(hr / 24)
   if (d < 30) return `${d}d ago`
-  return new Date(iso).toLocaleDateString()
+  return formatDate(iso)
 }
 
 function initialsOf(name: string) {

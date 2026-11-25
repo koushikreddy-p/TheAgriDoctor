@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
 import L from 'leaflet'
+import { formatDate } from '@/lib/format'
 
 export type HeatPoint = {
   id: string
@@ -124,7 +125,7 @@ export default function HeatmapMapInner({
                         Severity: <span className="font-medium" style={{ color }}>{p.severity}</span> · {p.status}
                       </p>
                       <p className="text-slate-400 mt-1">
-                        {new Date(p.created_at).toLocaleDateString()}
+                        {formatDate(p.created_at)}
                         {p.is_mine && <span className="ml-1 text-emerald-600 font-medium">· you</span>}
                       </p>
                     </div>

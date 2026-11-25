@@ -4,10 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import {
   Activity, Sprout, Cloud, AlertTriangle, ArrowRight, Trees, BarChart3,
   MessageCircle, Users as UsersIcon, Leaf, Satellite, Radar, Bell,
-  CalendarClock, CheckCircle2,
-} from 'lucide-react'
+  CalendarClock, CheckCircle2, Cpu } from 'lucide-react'
 import { computeAlerts, alertToneClasses, type MonitorSnapshot, ndviMean } from '@/lib/alerts'
 import { WeatherRadar } from '@/components/farm/weather-radar'
+import { formatDate, indiaHour } from '@/lib/format'
 
 export const dynamic = 'force-dynamic'
 
@@ -139,14 +139,12 @@ export default async function DashboardPage() {
 
   const today = new Date()
   const greeting = (() => {
-    const h = today.getHours()
+    const h = indiaHour(today) // server runs in UTC; greet by Indian time
     if (h < 12) return 'Good morning'
     if (h < 17) return 'Good afternoon'
     return 'Good evening'
   })()
-  const dateLabel = today.toLocaleDateString(undefined, {
-    weekday: 'long', month: 'long', day: 'numeric',
-  })
+  const dateLabel = formatDate(today, { weekday: 'long', month: 'long', day: 'numeric' })
 
   const tiles = [
     {
@@ -195,6 +193,7 @@ export default async function DashboardPage() {
     { href: '/weather', label: 'Weather', icon: Cloud },
     { href: '/market', label: 'Market Prices', icon: BarChart3 },
     { href: '/alerts', label: 'Alerts', icon: Bell },
+    { href: '/ai-status', label: 'AI Engine', icon: Cpu },
     { href: '/community', label: 'Community', icon: UsersIcon },
   ]
 
@@ -280,7 +279,7 @@ export default async function DashboardPage() {
             <CardDescription>Jump straight into the tools you use most</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
+            <div className="grid grid-cols-4 gap-2.5">
               {quickLinks.map((q, i) => {
                 const tints = [
                   'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
@@ -290,18 +289,19 @@ export default async function DashboardPage() {
                   'bg-rose-50 text-rose-700 hover:bg-rose-100',
                   'bg-orange-50 text-orange-700 hover:bg-orange-100',
                   'bg-purple-50 text-purple-700 hover:bg-purple-100',
+                  'bg-teal-50 text-teal-700 hover:bg-teal-100',
                 ]
                 const tint = tints[i % tints.length]
                 return (
                   <Link
                     key={q.href}
                     href={q.href}
-                    className="group flex flex-col items-center justify-center p-3 rounded-xl border border-slate-100 hover:border-slate-200 hover:shadow-sm transition-all"
+                    className="group flex flex-col items-center justify-center p-3 lg:py-5 rounded-xl border border-slate-100 hover:border-slate-200 hover:shadow-sm transition-all"
                   >
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-2 transition-colors ${tint}`}>
                       <q.icon className="w-5 h-5" />
                     </div>
-                    <span className="text-[11px] font-medium text-slate-700 text-center leading-tight">{q.label}</span>
+                    <span className="text-[11px] sm:text-xs font-medium text-slate-700 text-center leading-tight">{q.label}</span>
                   </Link>
                 )
               })}
@@ -506,19 +506,23 @@ export default async function DashboardPage() {
                     className="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition-colors"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        d.severity === 'critical' || d.severity === 'high' ? 'bg-red-50' : 'bg-emerald-50'
-                      }`}>
-                        <AlertTriangle className={`w-4 h-4 ${
-                          d.severity === 'critical' || d.severity === 'high' ? 'text-red-500' : 'text-emerald-500'
-                        }`} />
-                      </div>
+                      {(() => {
+                        const healthy = /healthy/i.test(d.disease_name ?? '')
+                        const tone = healthy ? 'bg-emerald-50 text-emerald-500'
+                          : d.severity === 'critical' || d.severity === 'high' ? 'bg-red-50 text-red-500'
+                          : 'bg-amber-50 text-amber-500'
+                        return (
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${tone}`}>
+                            {healthy ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                          </div>
+                        )
+                      })()}
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-slate-800 truncate">
                           {d.disease_name || 'Unknown condition'}
                         </p>
                         <p className="text-xs text-slate-400">
-                          {d.crop_type} · {new Date(d.created_at).toLocaleDateString()}
+                          {d.crop_type} · {formatDate(d.created_at)}
                         </p>
                       </div>
                     </div>

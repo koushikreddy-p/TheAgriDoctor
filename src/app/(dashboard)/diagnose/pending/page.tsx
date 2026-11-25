@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { AlertTriangle, CheckCircle2, ChevronRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { DiagnosisReport } from '@/types/diagnose'
+import { AiNotice } from '@/components/ai-notice'
 
 export default function PendingDiagnosisPage() {
   const [data, setData] = useState<{ report: DiagnosisReport; cropType: string } | null | undefined>(undefined)
@@ -79,6 +80,7 @@ export default function PendingDiagnosisPage() {
       {list('Organic treatment', report.organic_treatment)}
       {list('Chemical treatment', report.chemical_treatment?.map((c) => `${c.product} — ${c.dosage}, ${c.frequency}`))}
       {list('Prevention', report.prevention_tips)}
+      <AiNotice />
     </div>
   )
 }

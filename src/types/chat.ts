@@ -10,5 +10,7 @@ export type ChatMessage = {
   session_id: string
   role: 'user' | 'assistant'
   content: string
+  /** AI model that wrote an assistant reply */
+  model?: string | null
   created_at: string
 }

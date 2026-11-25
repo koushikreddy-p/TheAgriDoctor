@@ -139,6 +139,7 @@ export async function POST(req: NextRequest) {
         severity: report.severity,
         full_report_json: report,
         status: 'open',
+        ai_model: model,
       })
       .select('id')
       .single()

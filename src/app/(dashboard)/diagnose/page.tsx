@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
-import { UploadCloud, X, Loader2, Sprout, AlertCircle, CheckCircle2, ChevronDown } from 'lucide-react'
+import { UploadCloud, X, Loader2, Sprout, AlertCircle, CheckCircle2, ChevronDown, ImageDown, ShieldCheck, Cpu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { compressImage, uploadDiagnosisImage } from '@/lib/upload'
@@ -15,7 +15,47 @@ const CROP_OPTIONS = [
   'Groundnut', 'Mango', 'Banana', 'Grapes', 'Other'
 ]
 
-type UIState = 'idle' | 'uploading' | 'analyzing' | 'done' | 'error'
+type UIState = 'idle' | 'compressing' | 'uploading' | 'analyzing' | 'done' | 'error'
+
+const STEPS: { key: UIState; label: string; icon: React.ElementType }[] = [
+  { key: 'compressing', label: 'Optimising photos', icon: ImageDown },
+  { key: 'uploading', label: 'Uploading securely', icon: ShieldCheck },
+  { key: 'analyzing', label: 'AI analysis', icon: Cpu },
+]
+
+function ProgressCard({ state, seconds }: { state: UIState; seconds: number }) {
+  const order = ['compressing', 'uploading', 'analyzing', 'done']
+  const current = order.indexOf(state)
+  return (
+    <Card className="border-emerald-200" aria-live="polite">
+      <CardContent className="p-5">
+        <ol className="grid grid-cols-3 gap-2">
+          {STEPS.map((s, i) => {
+            const done = current > i
+            const active = current === i
+            const Icon = s.icon
+            return (
+              <li key={s.key} className="flex flex-col items-center text-center gap-1.5">
+                <span className={`w-9 h-9 rounded-full flex items-center justify-center ${done ? 'bg-emerald-600 text-white' : active ? 'bg-emerald-100 text-emerald-700 ring-2 ring-emerald-300' : 'bg-slate-100 text-slate-400'}`}>
+                  {done ? <CheckCircle2 className="w-5 h-5" /> : active ? <Loader2 className="w-5 h-5 animate-spin" /> : <Icon className="w-4 h-4" />}
+                </span>
+                <span className={`text-xs font-medium ${done || active ? 'text-slate-800' : 'text-slate-400'}`}>{s.label}</span>
+              </li>
+            )
+          })}
+        </ol>
+        <p className="text-center text-xs text-slate-500 mt-4">
+          {state === 'done' ? 'Report ready — opening it now…' : `Working… ${seconds}s`}
+        </p>
+        {state === 'analyzing' && seconds >= 10 && (
+          <p className="text-center text-xs text-amber-700 mt-1">
+            Taking longer than usual — AgriDoctor automatically tries backup AI models. This can take up to a minute.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
 
 export default function DiagnosePage() {
   const router = useRouter()
@@ -52,7 +92,7 @@ export default function DiagnosePage() {
     if (!files.length || !cropType) return
 
     setErrorMsg('')
-    setUiState('uploading')
+    setUiState('compressing')
 
     try {
       // Get current user
@@ -64,7 +104,6 @@ export default function DiagnosePage() {
       const user = { id: authUser.id }
 
       // Compress photos in the browser (≈1280 px JPEG) — faster uploads and stays under request limits
-      setUiState('uploading')
       // One at a time: keeps memory low on budget phones (12 MP photos decode to ~48 MB each)
       const compressed: { blob: Blob; dataUrl: string }[] = []
       for (const f of files) {
@@ -77,6 +116,7 @@ export default function DiagnosePage() {
       const base64Array = compressed.map(c => c.dataUrl)
 
       // Store the compressed images in Supabase Storage (non-fatal if it fails)
+      setUiState('uploading')
       let imagePaths: string[] = []
       try {
         imagePaths = await Promise.all(compressed.map(c => uploadDiagnosisImage(c.blob, user.id)))
@@ -115,7 +155,18 @@ export default function DiagnosePage() {
     }
   }
 
-  const isDisabled = !files.length || !cropType || uiState === 'uploading' || uiState === 'analyzing'
+  const busy = uiState === 'compressing' || uiState === 'uploading' || uiState === 'analyzing' || uiState === 'done'
+  const isDisabled = !files.length || !cropType || busy
+
+  // Elapsed-time counter while working
+  const [seconds, setSeconds] = useState(0)
+  useEffect(() => {
+    if (!busy) return
+    setSeconds(0)
+    const started = Date.now()
+    const id = setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [busy])
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -170,7 +221,7 @@ export default function DiagnosePage() {
             <p className="text-sm font-medium text-slate-600">
               {isDragging ? 'Drop images here' : 'Drag & drop images or click to browse'}
             </p>
-            <p className="text-xs text-slate-400 mt-1">JPG, PNG, HEIC — up to 5 images, 10MB each</p>
+            <p className="text-xs text-slate-400 mt-1">JPG or PNG · up to 5 photos · resized automatically for fast upload</p>
             <input
               ref={fileInputRef}
               type="file"
@@ -229,22 +280,18 @@ export default function DiagnosePage() {
         </div>
       )}
 
+      {busy && <ProgressCard state={uiState} seconds={seconds} />}
+
       {/* Submit */}
       <Button
         onClick={handleDiagnose}
         disabled={isDisabled}
         className="w-full h-12 text-base bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {uiState === 'uploading' && (
+        {(uiState === 'compressing' || uiState === 'uploading' || uiState === 'analyzing') && (
           <>
             <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-            Uploading images…
-          </>
-        )}
-        {uiState === 'analyzing' && (
-          <>
-            <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-            AI is analyzing your crop…
+            Analysing your crop…
           </>
         )}
         {uiState === 'done' && (

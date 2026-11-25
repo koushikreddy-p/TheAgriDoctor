@@ -12,9 +12,13 @@ import {
   Shield,
   TrendingDown,
   ChevronRight,
+  Cpu,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import Link from 'next/link'
+import { AiNotice } from '@/components/ai-notice'
+import { modelName } from '@/lib/ai-models'
+import { formatDate } from '@/lib/format'
 
 const SEVERITY_CONFIG = {
   low: { label: 'Low', classes: 'bg-emerald-100 text-emerald-800 border-emerald-200', icon: CheckCircle2 },
@@ -122,6 +126,11 @@ export default async function DiagnoseResultPage({ params: paramsPromise }: { pa
             </div>
           </div>
 
+          {diagnosis.ai_model && (
+            <p className="mt-4 text-xs text-slate-400 flex items-center gap-1.5">
+              <Cpu className="w-3.5 h-3.5" /> AI analysis by <span className="font-medium text-slate-500">{modelName(diagnosis.ai_model)}</span>
+            </p>
+          )}
           {/* Quick stats */}
           {report && (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-5 pt-5 border-t border-slate-100">
@@ -135,7 +144,7 @@ export default async function DiagnoseResultPage({ params: paramsPromise }: { pa
               </div>
               <div>
                 <p className="text-xs text-slate-400">Detected</p>
-                <p className="text-sm font-semibold text-slate-700 mt-0.5">{new Date(diagnosis.created_at).toLocaleDateString()}</p>
+                <p className="text-sm font-semibold text-slate-700 mt-0.5">{formatDate(diagnosis.created_at)}</p>
               </div>
             </div>
           )}
@@ -264,17 +273,15 @@ export default async function DiagnoseResultPage({ params: paramsPromise }: { pa
         </Card>
       )}
 
+      <AiNotice />
+
       {/* Actions */}
       <div className="flex gap-3 pb-6">
-        <Link href="/diagnose" className="flex-1">
-          <button className="w-full h-11 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
-            New Diagnosis
-          </button>
+        <Link href="/diagnose" className="flex-1 h-11 inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors">
+          New Diagnosis
         </Link>
-        <Link href="/diagnose/history" className="flex-1">
-          <button className="w-full h-11 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors">
-            View History
-          </button>
+        <Link href="/diagnose/history" className="flex-1 h-11 inline-flex items-center justify-center rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors">
+          View History
         </Link>
       </div>
     </div>

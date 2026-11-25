@@ -52,6 +52,12 @@ export type AiOptions = {
   chain?: ChainStep[]
   /** Models to skip (used internally by aiJson to move past a model that produced bad JSON). */
   exclude?: Set<string>
+  /**
+   * DEMO / DIAGNOSTICS ONLY: models (as "provider:model") that should fail with a
+   * simulated outage, without any network call and without affecting real health
+   * state. Used by the AI Engine status page to demonstrate failover live.
+   */
+  simulateFailures?: Set<string>
 }
 
 export type Attempt = {
@@ -102,8 +108,9 @@ export const VISION_CHAIN: ChainStep[] = [
   ...GEMINI_STEPS,
 ]
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
+// Optional overrides (e.g. a corporate AI gateway, or a local mock for testing). Server-side env only.
+const OPENROUTER_URL = `${(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '')}/chat/completions`
+const GEMINI_BASE = `${(process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '')}/models`
 
 const DEFAULTS = {
   attemptTimeoutMs: 30_000,
@@ -115,7 +122,7 @@ const DEFAULTS = {
 // ─── Circuit breaker (per warm server instance) ───────────────────────────────
 
 const cooldownUntil = new Map<string, number>()
-const stepKey = (s: ChainStep) => `${s.provider}:${s.model}`
+export const stepKey = (s: ChainStep) => `${s.provider}:${s.model}`
 
 function coolDown(step: ChainStep, ms: number) {
   cooldownUntil.set(stepKey(step), Date.now() + ms)
@@ -138,6 +145,8 @@ function orderChain(chain: ChainStep[], exclude?: Set<string>): ChainStep[] {
 
 class ProviderError extends Error {
   status?: number
+  /** True for failures injected by the simulateFailures option (never cools a model down). */
+  simulated?: boolean
   /** True when the whole provider is unusable (bad / missing key). */
   providerFatal: boolean
   retryAfterMs?: number
@@ -161,7 +170,7 @@ async function errorFromResponse(step: ChainStep, res: Response): Promise<Provid
 
 /** Decide how long a failing model should sit out. */
 function applyCooldown(step: ChainStep, err: unknown) {
-  if (!(err instanceof ProviderError)) return
+  if (!(err instanceof ProviderError) || err.simulated) return
   if (err.status === 429) coolDown(step, err.retryAfterMs ?? 60_000)
   else if (err.status === 404) coolDown(step, 10 * 60_000) // model retired / renamed
   else if (err.status && err.status >= 500) coolDown(step, 20_000)
@@ -275,7 +284,15 @@ function geminiText(json: unknown): string {
 
 // ─── Single (non-streaming) attempt ───────────────────────────────────────────
 
+function simulatedOutage(step: ChainStep, opts: AiOptions) {
+  if (!opts.simulateFailures?.has(stepKey(step))) return
+  const e = new ProviderError(`${step.model} → simulated outage (HTTP 503)`, { status: 503 })
+  e.simulated = true
+  throw e
+}
+
 async function callOnce(step: ChainStep, req: AiRequest, opts: AiOptions, signal: AbortSignal): Promise<string> {
+  simulatedOutage(step, opts)
   const key = keyFor(step.provider)
   if (!key) throw new ProviderError(`${step.provider} API key not configured`, { providerFatal: true })
 
@@ -306,7 +323,20 @@ async function callOnce(step: ChainStep, req: AiRequest, opts: AiOptions, signal
   return text.trim()
 }
 
+export type RecentRequest = { at: string; label: string; ok: boolean; model?: string; latencyMs?: number; attempts: Attempt[] }
+const RECENT_MAX = 25
+const recent: RecentRequest[] = []
+
 function logResult(label: string, ok: boolean, attempts: Attempt[], extra: Record<string, unknown> = {}) {
+  recent.unshift({
+    at: new Date().toISOString(),
+    label,
+    ok,
+    model: extra.model as string | undefined,
+    latencyMs: (extra.latencyMs ?? extra.firstTokenMs) as number | undefined,
+    attempts: attempts.map((a) => ({ ...a })),
+  })
+  if (recent.length > RECENT_MAX) recent.length = RECENT_MAX
   const line = JSON.stringify({ label, ok, ...extra, attempts })
   if (ok) console.info('[ai]', line)
   else console.error('[ai]', line)
@@ -439,6 +469,7 @@ async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string
 }
 
 async function* streamTokens(step: ChainStep, req: AiRequest, opts: AiOptions, signal: AbortSignal): AsyncGenerator<string> {
+  simulatedOutage(step, opts)
   const key = keyFor(step.provider)
   if (!key) throw new ProviderError(`${step.provider} API key not configured`, { providerFatal: true })
 
@@ -597,4 +628,23 @@ function buildStream(
   })
 
   return { provider: step.provider, model: step.model, attempts, stream, done }
+}
+
+// ─── Diagnostics (AI Engine status page) ──────────────────────────────────────
+
+export type StepHealth = ChainStep & { keyConfigured: boolean; coolingDownMs: number }
+
+/** Current health of every model in a chain, as seen by this server instance. */
+export function getChainHealth(chain: ChainStep[]): StepHealth[] {
+  const now = Date.now()
+  return chain.map((s) => ({
+    ...s,
+    keyConfigured: !!keyFor(s.provider),
+    coolingDownMs: Math.max(0, (cooldownUntil.get(stepKey(s)) ?? 0) - now),
+  }))
+}
+
+/** Most recent AI requests handled by this server instance (newest first). */
+export function getRecentRequests(): RecentRequest[] {
+  return recent.map((r) => ({ ...r, attempts: r.attempts.map((a) => ({ ...a })) }))
 }
