@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Cloud, Droplets, Wind, Sun, Search, Loader2, AlertCircle, MapPin, Gauge, Eye } from 'lucide-react'
+import { Droplets, Wind, Sun, Search, Loader2, AlertCircle, MapPin, Gauge, Eye } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'

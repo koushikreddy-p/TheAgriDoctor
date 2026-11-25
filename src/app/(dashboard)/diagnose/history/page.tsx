@@ -13,10 +13,11 @@ const SEVERITY_STYLES: Record<string, string> = {
 }
 
 export default async function DiagnoseHistoryPage({
-  searchParams,
+  searchParams: searchParamsPromise,
 }: {
-  searchParams: { crop?: string; severity?: string; status?: string }
+  searchParams: Promise<{ crop?: string; severity?: string; status?: string }>
 }) {
+  const searchParams = await searchParamsPromise
   const { user, supabase } = await requireUser()
 
   let query = supabase

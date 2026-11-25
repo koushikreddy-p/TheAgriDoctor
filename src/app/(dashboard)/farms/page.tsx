@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Plus, Trees, MapPin, Sprout, ChevronRight, Leaf } from 'lucide-react'
+import { Plus, Trees, MapPin, ChevronRight, Leaf } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import type { Farm, CropCycle } from '@/types/farm'
 
 type FarmWithCrops = Farm & { crop_cycles: CropCycle[] }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 // GET /api/weather?lat=..&lng=..  OR  ?q=<city>
 // Uses OpenWeatherMap "One Call"-compatible endpoints (free tier).
@@ -24,11 +25,13 @@ export async function GET(req: NextRequest) {
     let currentUrl: string
     let forecastUrl: string
 
+    const validCoord = (v: string, max: number) => /^-?\d{1,3}(\.\d{1,8})?$/.test(v) && Math.abs(Number(v)) <= max
     if (lat && lng) {
+      if (!validCoord(lat, 90) || !validCoord(lng, 180)) return NextResponse.json({ error: 'Invalid coordinates' }, { status: 400 })
       currentUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lng}&units=metric&appid=${apiKey}`
       forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lng}&units=metric&appid=${apiKey}`
     } else if (q) {
-      const query = encodeURIComponent(q)
+      const query = encodeURIComponent(q.slice(0, 100))
       currentUrl = `https://api.openweathermap.org/data/2.5/weather?q=${query}&units=metric&appid=${apiKey}`
       forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?q=${query}&units=metric&appid=${apiKey}`
     } else {
@@ -42,7 +45,7 @@ export async function GET(req: NextRequest) {
 
     if (!curRes.ok) {
       const errText = await curRes.text()
-      return NextResponse.json({ error: `Weather API error (${curRes.status})`, detail: errText }, { status: curRes.status })
+      return serverError('/api/weather', `upstream ${curRes.status}: ${errText.slice(0, 200)}`, 'Weather service is unavailable right now.', 502)
     }
     const current = await curRes.json()
     const forecast = fcstRes.ok ? await fcstRes.json() : null
@@ -72,6 +75,7 @@ export async function GET(req: NextRequest) {
         wind_speed: current.wind?.speed,
         wind_deg: current.wind?.deg,
         clouds: current.clouds?.all,
+        rain_1h: current.rain?.['1h'] ?? 0,
         weather: current.weather?.[0],
         sunrise: current.sys?.sunrise,
         sunset: current.sys?.sunset,
@@ -79,6 +83,6 @@ export async function GET(req: NextRequest) {
       forecast: daily,
     })
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return serverError('/api/weather', err)
   }
 }

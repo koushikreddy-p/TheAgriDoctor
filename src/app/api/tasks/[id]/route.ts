@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 // PATCH /api/tasks/[id] — update status / fields
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   const { user, supabase } = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -40,15 +42,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .select()
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return serverError('/api/tasks/[id]', error)
   
   // Map task_name to title for frontend compatibility
-  const taskWithTitle = data ? { ...data, title: (data as any).task_name } : null
+  const taskWithTitle = data ? { ...data, title: (data as { task_name: string }).task_name } : null
   return NextResponse.json({ task: taskWithTitle })
 }
 
 // DELETE /api/tasks/[id]
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   const { user, supabase } = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -58,11 +61,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     .eq('id', params.id)
     .single()
   if (!task) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  // @ts-expect-error
+  // @ts-expect-error supabase join typing
   if (task.crop_cycles?.farms?.user_id !== user.id)
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { error } = await supabase.from('crop_tasks').delete().eq('id', params.id)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return serverError('/api/tasks/[id]', error)
   return NextResponse.json({ ok: true })
 }

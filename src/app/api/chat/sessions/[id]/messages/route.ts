@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 // GET /api/chat/sessions/[id]/messages — get messages for a session
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   try {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -26,6 +28,6 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     if (error) throw error
     return NextResponse.json(data)
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return serverError('/api/chat/sessions/[id]/messages', err)
   }
 }

@@ -6,7 +6,6 @@ import Image from 'next/image'
 import { UploadCloud, X, Loader2, Sprout, AlertCircle, CheckCircle2, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Label } from '@/components/ui/label'
 import { compressImage, uploadDiagnosisImage } from '@/lib/upload'
 import { createClient } from '@/lib/supabase/client'
 

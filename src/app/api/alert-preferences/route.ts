@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { DEFAULT_ALERT_PREFS, type AlertPreferences } from '@/lib/alerts'
+import { serverError } from '@/lib/api-error'
 
 export async function GET() {
   const { user, supabase } = await getUser()
@@ -30,6 +31,6 @@ export async function PUT(req: NextRequest) {
     .from('users')
     .upsert({ id: user.id, alert_preferences: body.preferences ?? null }, { onConflict: 'id' })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return serverError('/api/alert-preferences', error)
   return NextResponse.json({ ok: true })
 }

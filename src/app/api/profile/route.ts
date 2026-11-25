@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 export async function GET() {
   const { user, supabase } = await getUser()
@@ -11,7 +12,7 @@ export async function GET() {
     .eq('id', user.id)
     .maybeSingle()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return serverError('/api/profile', error)
 
   return NextResponse.json({
     profile: data ?? { id: user.id, full_name: null, phone: null, state: null, district: null, preferred_language: null },
@@ -41,9 +42,9 @@ export async function PATCH(req: NextRequest) {
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return serverError('/api/profile', error)
     return NextResponse.json({ profile: data })
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return serverError('/api/profile', err)
   }
 }

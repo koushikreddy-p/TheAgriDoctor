@@ -161,7 +161,8 @@ export default function WeatherRadarInner({
   defaultLayer?: LayerKey
   compact?: boolean
 }) {
-  const apiKey = process.env.NEXT_PUBLIC_OPENWEATHER_API_KEY ?? ''
+  // Weather data and map tiles come through our own API routes; the OpenWeather key stays on the server.
+  const [configured, setConfigured] = useState(true)
   const [layer, setLayer] = useState<LayerKey>(defaultLayer)
   const [mounted, setMounted] = useState(false)
   const [showSweep, setShowSweep] = useState(true)
@@ -195,30 +196,31 @@ export default function WeatherRadarInner({
   }, [])
 
   const loadCurrent = useCallback(async () => {
-    if (!apiKey) return
     setCurrentLoading(true)
     try {
-      const r = await fetch(
-        `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lng}&units=metric&appid=${apiKey}`,
-      )
-      if (!r.ok) throw new Error(`owm ${r.status}`)
-      const j = await r.json()
+      const r = await fetch(`/api/weather?lat=${lat}&lng=${lng}`)
+      if (r.status === 503) {
+        setConfigured(false)
+        return
+      }
+      if (!r.ok) throw new Error(`weather ${r.status}`)
+      const c = (await r.json()).current ?? {}
       setCurrent({
-        temp: Math.round((j.main?.temp ?? 0) * 10) / 10,
-        humidity: j.main?.humidity ?? 0,
-        pressure: j.main?.pressure ?? 0,
-        wind: Math.round((j.wind?.speed ?? 0) * 10) / 10,
-        clouds: j.clouds?.all ?? 0,
-        rain1h: j.rain?.['1h'] ?? 0,
-        condition: j.weather?.[0]?.description ?? '—',
-        icon: j.weather?.[0]?.icon ?? '',
+        temp: Math.round((c.temp ?? 0) * 10) / 10,
+        humidity: c.humidity ?? 0,
+        pressure: c.pressure ?? 0,
+        wind: Math.round((c.wind_speed ?? 0) * 10) / 10,
+        clouds: c.clouds ?? 0,
+        rain1h: c.rain_1h ?? 0,
+        condition: c.weather?.description ?? '—',
+        icon: c.weather?.icon ?? '',
       })
     } catch {
       // noop
     } finally {
       setCurrentLoading(false)
     }
-  }, [apiKey, lat, lng])
+  }, [lat, lng])
 
   useEffect(() => {
     loadCurrent()
@@ -253,9 +255,9 @@ export default function WeatherRadarInner({
 
   const owmTileUrl = useMemo(
     () => (layer !== 'precipitation'
-      ? `https://tile.openweathermap.org/map/${layer}/{z}/{x}/{y}.png?appid=${apiKey}`
+      ? `/api/weather/tiles/${layer}/{z}/{x}/{y}`
       : null),
-    [layer, apiKey],
+    [layer],
   )
   const rvTileUrl = useMemo(() => {
     if (!rv || !activeFrame || layer !== 'precipitation') return null
@@ -264,10 +266,10 @@ export default function WeatherRadarInner({
 
   const meta = LAYERS.find((l) => l.key === layer)!
 
-  if (!apiKey) {
+  if (!configured) {
     return (
       <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3">
-        Weather radar requires <code>NEXT_PUBLIC_OPENWEATHER_API_KEY</code> to be set.
+        Weather radar requires <code>OPENWEATHER_API_KEY</code> to be set on the server.
       </div>
     )
   }

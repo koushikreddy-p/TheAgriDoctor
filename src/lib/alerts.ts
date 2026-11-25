@@ -63,9 +63,15 @@ export type MonitorSnapshot = {
   }> | null
   soil?: { moisture?: number; t0?: number; t10?: number } | null
   uvi?: { uvi?: number } | null
-  ndvi?: { dt?: number; mean?: number; min?: number; max?: number; ndvi_url?: string; true_url?: string } | null
+  ndvi?: { stats?: { mean?: number; min?: number; max?: number } | null; mean?: number } | null
   accumulated_rain?: { count?: number } | null
 } | null | undefined
+
+/** Mean NDVI of the latest scan. Scans store it under ndvi.stats.mean (older shape: ndvi.mean). */
+export function ndviMean(snap: MonitorSnapshot): number | undefined {
+  const v = snap?.ndvi?.stats?.mean ?? snap?.ndvi?.mean
+  return typeof v === 'number' ? v : undefined
+}
 
 function k2c(k?: number) {
   return typeof k === 'number' ? k - 273.15 : undefined
@@ -221,7 +227,7 @@ export function computeAlerts(snap: MonitorSnapshot, prefs?: AlertPreferences | 
   }
 
   // — NDVI vegetation health
-  const ndvi = snap.ndvi?.mean
+  const ndvi = ndviMean(snap)
   if (typeof ndvi === 'number') {
     if (ndvi < (p.ndvi?.critical ?? 0.2)) {
       alerts.push({

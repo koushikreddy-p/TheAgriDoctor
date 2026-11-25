@@ -27,7 +27,7 @@ type Snapshot = {
   soil: { dt: number; t10: number; moisture: number; t0: number } | null
   uvi: { dt: number; uvi: number } | null
   ndvi: {
-    image: { dt: number; cl: number; type: string; image: { ndvi: string; truecolor: string; falsecolor: string } }
+    image: { dt: number; cl: number; type: string }
     stats: { min?: number; max?: number; mean?: number; median?: number; std?: number; num?: number } | null
   } | null
   accumulated_gdd: { dt: number; temp: number; count: number } | null
@@ -420,8 +420,8 @@ export function FieldMonitoring({ farmId, farmLat, farmLng }: { farmId: string; 
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2 mt-2">
-                  <SatelliteTile label="NDVI" url={`${snap.ndvi.image.image.ndvi}&paletteid=1`} />
-                  <SatelliteTile label="True colour" url={snap.ndvi.image.image.truecolor} />
+                  <SatelliteTile label="NDVI" url={`/api/farms/${farmId}/satellite?kind=ndvi&palette=1&dt=${snap.ndvi.image.dt}`} />
+                  <SatelliteTile label="True colour" url={`/api/farms/${farmId}/satellite?kind=truecolor&dt=${snap.ndvi.image.dt}`} />
                 </div>
               </>
             ) : (

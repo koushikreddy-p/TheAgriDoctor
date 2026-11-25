@@ -1,11 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // Type and lint errors now FAIL the build instead of being silently ignored.
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'openweathermap.org' },

@@ -111,22 +111,14 @@ export async function latestNdviStats(polyId: string, days = 30): Promise<{ imag
   // prefer lowest cloud coverage
   const sorted = [...images].sort((a, b) => (a.cl ?? 100) - (b.cl ?? 100))
   const best = sorted[0]
-  // Rewrite image URLs to include appid so the browser can fetch them directly
+  // Image URLs are stored WITHOUT the API key. The browser loads them through
+  // /api/farms/[id]/satellite, which adds the key server-side.
   const key = requireKey()
-  const withKey = (u?: string) => (u ? `${u}${u.includes('?') ? '&' : '?'}appid=${key}` : u)
-  const decoratedImage: SatImage = {
-    ...best,
-    image: {
-      truecolor: withKey(best.image.truecolor) ?? '',
-      falsecolor: withKey(best.image.falsecolor) ?? '',
-      ndvi: withKey(best.image.ndvi) ?? '',
-      evi: withKey(best.image.evi) ?? '',
-    },
-  }
+  const decoratedImage: SatImage = best
   const statsUrl = best.stats?.ndvi
   if (!statsUrl) return { image: decoratedImage, stats: null }
   try {
-    const statsRes = await fetch(`${statsUrl}${statsUrl.includes('?') ? '&' : '?'}appid=${key}`)
+    const statsRes = await fetch(`${statsUrl.replace(/^http:/, 'https:')}${statsUrl.includes('?') ? '&' : '?'}appid=${key}`)
     if (!statsRes.ok) return { image: decoratedImage, stats: null }
     return { image: decoratedImage, stats: await statsRes.json() }
   } catch {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 // GET /api/market?commodity=...&state=...&market=...
 // Uses the data.gov.in mandi price API (resource id 9ef84268-d588-465a-a308-a864a43d0070).
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
   const commodity = searchParams.get('commodity') || ''
   const state = searchParams.get('state') || ''
   const market = searchParams.get('market') || ''
-  const limit = searchParams.get('limit') || '50'
+  const limit = String(Math.max(1, Math.min(200, Number(searchParams.get('limit')) || 50)))
 
   const url = new URL(`https://api.data.gov.in/resource/${DATA_GOV_RESOURCE}`)
   url.searchParams.set('api-key', apiKey)
@@ -36,7 +37,7 @@ export async function GET(req: NextRequest) {
     const res = await fetch(url.toString(), { next: { revalidate: 1800 } })
     if (!res.ok) {
       const txt = await res.text()
-      return NextResponse.json({ error: `Market API error (${res.status})`, detail: txt }, { status: res.status })
+      return serverError('/api/market', `upstream ${res.status}: ${txt.slice(0, 200)}`, 'Market price service is unavailable right now.', 502)
     }
     const json = await res.json()
     return NextResponse.json({
@@ -46,6 +47,6 @@ export async function GET(req: NextRequest) {
       updated: json.updated ?? null,
     })
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return serverError('/api/market', err)
   }
 }

@@ -1,89 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 
-// GET /api/diagnose/heatmap
-//   ?days=90 &crop=Rice &scope=me|all
-// Returns a list of diagnosis points keyed to farm lat/lng:
-//   { points: [{ id, lat, lng, crop_type, disease_name, severity, status, created_at, is_mine }], count }
+// GET /api/diagnose/heatmap?days=90&crop=Rice&scope=me|all
+// Returns: { points: [{ id, lat, lng, crop_type, disease_name, severity, status, created_at, is_mine }], count }
 //
-// Geolocation strategy: diagnoses are not geotagged directly.  We approximate each
-// diagnosis' location by the primary farm of the reporting user (first farm with
-// lat/lng found).  This is sufficient for district-level heatmapping.
+// Privacy by design: data comes from the database function public.disease_heatmap(),
+// which returns anonymised points only — no user ids, and each farm location rounded
+// to ~1 km. Diagnoses aren't geotagged, so each one is placed at its owner's first farm.
 
-type FarmLite = { id: string; user_id: string; lat: number; lng: number }
+type Row = {
+  id: string
+  lat: number
+  lng: number
+  crop_type: string
+  disease_name: string | null
+  severity: string | null
+  status: string
+  created_at: string
+  is_mine: boolean
+}
+
+// Deterministic jitter (~±250 m) so outbreaks from the same rounded location don't fully overlap.
+function jitter(seed: string) {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
+  const r1 = (h & 0xffff) / 0xffff - 0.5
+  const r2 = ((h >>> 16) & 0xffff) / 0xffff - 0.5
+  return { dLat: r1 * 0.005, dLng: r2 * 0.005 }
+}
 
 export async function GET(req: NextRequest) {
   const { user, supabase } = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const sp = req.nextUrl.searchParams
-  const days = Math.max(1, Math.min(730, Number(sp.get('days') ?? 90)))
-  const crop = sp.get('crop')?.trim()
+  const days = Math.max(1, Math.min(730, Number(sp.get('days')) || 90))
+  const crop = sp.get('crop')?.trim().slice(0, 40) || null
   const scope = sp.get('scope') === 'me' ? 'me' : 'all'
 
-  const since = new Date(Date.now() - days * 86400000).toISOString()
-
-  // 1) fetch diagnoses
-  let dq = supabase
-    .from('diagnoses')
-    .select('id, user_id, crop_type, disease_name, severity, status, created_at')
-    .gte('created_at', since)
-    .order('created_at', { ascending: false })
-    .limit(1000)
-  if (scope === 'me') dq = dq.eq('user_id', user.id)
-  if (crop) dq = dq.ilike('crop_type', `%${crop}%`)
-
-  const { data: diagnoses, error: dErr } = await dq
-  if (dErr) return NextResponse.json({ error: dErr.message }, { status: 500 })
-
-  if (!diagnoses || diagnoses.length === 0)
-    return NextResponse.json({ points: [], count: 0 })
-
-  // 2) fetch farms with coords for those users
-  const userIds = Array.from(new Set(diagnoses.map((d) => d.user_id)))
-  const { data: farms, error: fErr } = await supabase
-    .from('farms')
-    .select('id, user_id, lat, lng')
-    .in('user_id', userIds)
-    .not('lat', 'is', null)
-    .not('lng', 'is', null)
-
-  if (fErr) return NextResponse.json({ error: fErr.message }, { status: 500 })
-
-  // Pick first farm per user
-  const farmByUser = new Map<string, FarmLite>()
-  for (const f of (farms ?? []) as FarmLite[]) {
-    if (!farmByUser.has(f.user_id)) farmByUser.set(f.user_id, f)
+  const { data, error } = await supabase.rpc('disease_heatmap', { p_days: days, p_crop: crop })
+  if (error) {
+    console.error('[/api/diagnose/heatmap]', error.message)
+    return NextResponse.json({ error: 'Could not load the heatmap. Please try again.' }, { status: 500 })
   }
 
-  // 3) deterministic small jitter (so co-located users don't fully overlap) based on diagnosis id
-  const jitter = (seed: string) => {
-    let h = 0
-    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
-    const r1 = ((h & 0xffff) / 0xffff) - 0.5
-    const r2 = (((h >>> 16) & 0xffff) / 0xffff) - 0.5
-    // ~500m jitter
-    return { dLat: r1 * 0.005, dLng: r2 * 0.005 }
-  }
-
-  const points = diagnoses
-    .map((d) => {
-      const f = farmByUser.get(d.user_id)
-      if (!f) return null
-      const { dLat, dLng } = jitter(d.id)
-      return {
-        id: d.id,
-        lat: Number(f.lat) + dLat,
-        lng: Number(f.lng) + dLng,
-        crop_type: d.crop_type,
-        disease_name: d.disease_name,
-        severity: d.severity ?? 'unknown',
-        status: d.status,
-        created_at: d.created_at,
-        is_mine: d.user_id === user.id,
-      }
+  const points = ((data ?? []) as Row[])
+    .filter((r) => scope === 'all' || r.is_mine)
+    .map((r) => {
+      const { dLat, dLng } = jitter(r.id)
+      return { ...r, lat: Number(r.lat) + dLat, lng: Number(r.lng) + dLng, severity: r.severity ?? 'unknown' }
     })
-    .filter((x): x is NonNullable<typeof x> => x !== null)
 
   return NextResponse.json({ points, count: points.length })
 }

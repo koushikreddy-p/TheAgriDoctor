@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 // GET /api/chat/sessions — list all sessions for user
 export async function GET() {
@@ -17,7 +18,7 @@ export async function GET() {
     if (error) throw error
     return NextResponse.json(data)
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return serverError('/api/chat/sessions', err)
   }
 }
 
@@ -36,6 +37,6 @@ export async function POST() {
     if (error) throw error
     return NextResponse.json(data)
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return serverError('/api/chat/sessions', err)
   }
 }

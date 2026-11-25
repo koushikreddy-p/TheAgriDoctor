@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 // GET /api/crops/[id]/tasks — list tasks for a crop cycle
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   const { user, supabase } = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -24,15 +26,16 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .order('due_date', { ascending: true, nullsFirst: false })
     .order('created_at', { ascending: false })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return serverError('/api/crops/[id]/tasks', error)
   
   // Map task_name to title for frontend compatibility
-  const tasks = data?.map((t: any) => ({ ...t, title: t.task_name })) ?? []
+  const tasks = data?.map((t: { task_name: string }) => ({ ...t, title: t.task_name })) ?? []
   return NextResponse.json({ tasks })
 }
 
 // POST /api/crops/[id]/tasks — create a manual task
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   const { user, supabase } = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -68,9 +71,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .select()
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return serverError('/api/crops/[id]/tasks', error)
   
   // Map task_name to title for frontend compatibility
-  const task = data ? { ...data, title: (data as any).task_name } : null
+  const task = data ? { ...data, title: (data as { task_name: string }).task_name } : null
   return NextResponse.json({ task }, { status: 201 })
 }

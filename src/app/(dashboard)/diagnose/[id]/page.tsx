@@ -63,7 +63,8 @@ function Section({
   )
 }
 
-export default async function DiagnoseResultPage({ params }: { params: { id: string } }) {
+export default async function DiagnoseResultPage({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   const { user, supabase } = await requireUser()
 
   const { data, error } = await supabase

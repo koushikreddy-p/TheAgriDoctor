@@ -17,7 +17,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 // GET /api/farms/[id]/monitor — returns latest scan snapshot (from cache or live)
 //   ?refresh=1 forces a live fetch
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   try {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -30,13 +31,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .single()
     if (error || !farm) return NextResponse.json({ error: 'Farm not found' }, { status: 404 })
     if (!farm.agro_polygon_id) {
-      return NextResponse.json({ enabled: false, farm }, { status: 200 })
+      return NextResponse.json({ enabled: false, farm: publicFarm(farm) }, { status: 200 })
     }
 
     const refresh = req.nextUrl.searchParams.get('refresh') === '1'
     const cacheFresh = farm.last_scan_at && Date.now() - new Date(farm.last_scan_at).getTime() < 10 * 60 * 1000
     if (!refresh && cacheFresh && farm.latest_monitor_snapshot) {
-      return NextResponse.json({ enabled: true, farm, snapshot: farm.latest_monitor_snapshot, cached: true })
+      return NextResponse.json({ enabled: true, farm: publicFarm(farm), snapshot: publicSnapshot(farm.latest_monitor_snapshot), cached: true })
     }
 
     const snapshot = await scanPolygon(farm.agro_polygon_id)
@@ -66,15 +67,16 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       console.warn('Notification sync failed (non-fatal):', e)
     }
 
-    return NextResponse.json({ enabled: true, farm: { ...farm, last_scan_at: now }, snapshot, cached: false })
+    return NextResponse.json({ enabled: true, farm: { ...publicFarm(farm), last_scan_at: now }, snapshot: publicSnapshot(snapshot), cached: false })
   } catch (err) {
     console.error('[/api/farms/.../monitor GET]', err)
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'unknown' }, { status: 500 })
+    return NextResponse.json({ error: 'Field monitoring is unavailable right now. Please try again.' }, { status: 500 })
   }
 }
 
 // POST — enable monitoring: create Agro polygon around farm lat/lng
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   try {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -121,12 +123,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ ok: true, polygon_id: created.id, area_ha: created.area, radius_m: body.geo_json ? null : radius })
   } catch (err) {
     console.error('[/api/farms/.../monitor POST]', err)
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'unknown' }, { status: 500 })
+    return NextResponse.json({ error: 'Field monitoring is unavailable right now. Please try again.' }, { status: 500 })
   }
 }
 
 // DELETE — disable monitoring + remove polygon from Agro
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   try {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -159,8 +162,28 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 
     return NextResponse.json({ ok: true })
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'unknown' }, { status: 500 })
+    console.error('[/api/farms/.../monitor DELETE]', err)
+    return NextResponse.json({ error: 'Field monitoring is unavailable right now. Please try again.' }, { status: 500 })
   }
+}
+
+/** Remove raw satellite URLs before sending a snapshot to the browser (images go through /satellite). */
+function publicSnapshot<T>(snap: T): T {
+  if (!snap || typeof snap !== 'object') return snap
+  const copy = JSON.parse(JSON.stringify(snap))
+  const img = copy?.ndvi?.image
+  if (img) {
+    delete img.image
+    delete img.stats
+    delete img.data
+  }
+  return copy
+}
+
+function publicFarm<T extends { latest_monitor_snapshot?: unknown }>(farm: T) {
+  const { latest_monitor_snapshot: _omit, ...rest } = farm
+  void _omit
+  return rest
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -242,7 +265,7 @@ async function syncAlertNotifications(
     user_id: userId,
     type: `alert_${a.level}`,
     title: `${farmName}: ${a.title}`,
-    body: a.detail,
+    message: a.detail,
     metadata: { farm_id: farmId, alert_id: a.id, level: a.level, metric: a.metric ?? null },
   }))
   await supabase.from('notifications').insert(rows)

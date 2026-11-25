@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { aiText } from '@/lib/ai'
 import { checkRateLimit } from '@/lib/rate-limit'
+import { getAdminClient } from '@/lib/supabase/admin'
 
 const MAX_AI_REPLIES_PER_POST = 3
 
@@ -32,7 +33,8 @@ async function generateAiReply(title: string, body: string, tags: string[]): Pro
   }
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   const { user, supabase } = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -66,18 +68,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         supabase.from('community_posts').select('title,body,tags').eq('id', params.id).maybeSingle(),
         supabase.from('community_replies').select('id', { count: 'exact', head: true }).eq('post_id', params.id).eq('is_ai', true),
       ])
-      if ((aiCount ?? 0) >= MAX_AI_REPLIES_PER_POST) aiSkipped = 'AI has already answered this post.'
+      // AI replies are written with the server-only service-role client: the database blocks
+      // ordinary users from creating is_ai replies, so "AgriDoctor AI" answers can't be forged.
+      const admin = getAdminClient()
+      if (!admin) {
+        console.warn('[community/ai] SUPABASE_SERVICE_ROLE_KEY not set — AI replies disabled')
+        aiSkipped = 'AI replies are not configured on this server.'
+      } else if ((aiCount ?? 0) >= MAX_AI_REPLIES_PER_POST) aiSkipped = 'AI has already answered this post.'
       else if (!checkRateLimit('communityAi', user.id).ok) aiSkipped = 'AI reply limit reached — please try again in a few minutes.'
       else if (post) {
         const aiContent = await generateAiReply(post.title, post.body, post.tags || [])
         if (aiContent) {
-          await supabase.from('community_replies').insert({
-            post_id: params.id,
-            user_id: null,
-            is_ai: true,
-            content: aiContent,
-          })
-        }
+          const { error: aiErr } = await admin
+            .from('community_replies')
+            .insert({ post_id: params.id, user_id: null, is_ai: true, content: aiContent })
+          if (aiErr) console.error('[community/ai] insert failed:', aiErr.message)
+        } else aiSkipped = 'AI is busy right now — please try again later.'
       }
     }
 

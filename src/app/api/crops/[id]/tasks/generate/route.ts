@@ -2,13 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
 import { generateTasks, dueDateFromOffset } from '@/lib/crop-tasks'
 import { rateLimitResponse } from '@/lib/rate-limit'
+import { serverError } from '@/lib/api-error'
 
 // AI fallback chain may try several models; allow time for it.
 export const maxDuration = 60
 
 // POST /api/crops/[id]/tasks/generate — use AI to generate tasks and insert them
 // Body (optional): { replace_pending?: boolean }
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   try {
     const { user, supabase } = await getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -75,7 +77,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }))
 
     const { data, error } = await supabase.from('crop_tasks').insert(rows).select()
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return serverError('/api/crops/[id]/tasks/generate', error)
 
     return NextResponse.json({ tasks: data, generated_count: data?.length ?? 0 })
   } catch (err) {

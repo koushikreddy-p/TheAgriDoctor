@@ -11,15 +11,20 @@ export async function GET(req: NextRequest) {
 
   let query = supabase
     .from('community_posts')
-    .select('id,title,body,crop_tag,tags,image_urls,upvotes,created_at,user_id,users(full_name)')
+    .select('id,title,body,crop_tag,tags,image_urls,upvotes,created_at,user_id,author_name')
     .order('created_at', { ascending: false })
     .limit(100)
 
-  if (q) query = query.or(`title.ilike.%${q}%,body.ilike.%${q}%`)
+  // Strip characters that have meaning in PostgREST filter syntax, so search text can't add conditions.
+  const safeQ = q?.replace(/[,()%*\\:."']/g, ' ').trim().slice(0, 100)
+  if (safeQ) query = query.or(`title.ilike.%${safeQ}%,body.ilike.%${safeQ}%`)
   if (tag) query = query.contains('tags', [tag])
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('[community GET]', error.message)
+    return NextResponse.json({ error: 'Something went wrong. Please try again.' }, { status: 500 })
+  }
 
   // Fetch reply counts
   const ids = (data ?? []).map((p) => p.id)
@@ -35,7 +40,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     posts: (data ?? []).map((p) => ({
       ...p,
-      author_name: (p.users as unknown as { full_name?: string } | null)?.full_name || 'Farmer',
+      author_name: p.author_name || 'Farmer',
       reply_count: counts[p.id] ?? 0,
     })),
   })
@@ -57,17 +62,21 @@ export async function POST(req: NextRequest) {
       .insert({
         user_id: user.id,
         title: String(title).slice(0, 200),
-        body: String(content).slice(0, 10000),
-        crop_tag: crop_tag || null,
-        tags: Array.isArray(tags) ? tags.slice(0, 10) : [],
-        image_urls: Array.isArray(image_urls) ? image_urls.slice(0, 6) : [],
+        body: String(content).slice(0, 5000),
+        crop_tag: typeof crop_tag === 'string' ? crop_tag.slice(0, 50) : null,
+        tags: Array.isArray(tags) ? tags.filter((t: unknown) => typeof t === 'string').map((t: string) => t.slice(0, 40)).slice(0, 10) : [],
+        image_urls: Array.isArray(image_urls) ? image_urls.filter((u: unknown) => typeof u === 'string' && /^https:\/\//.test(u)).slice(0, 6) : [],
       })
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) {
+      console.error('[community POST]', error.message)
+      return NextResponse.json({ error: 'Something went wrong. Please try again.' }, { status: 500 })
+    }
     return NextResponse.json({ post: data }, { status: 201 })
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    console.error('[community POST]', err instanceof Error ? err.message : err)
+    return NextResponse.json({ error: 'Something went wrong. Please try again.' }, { status: 500 })
   }
 }

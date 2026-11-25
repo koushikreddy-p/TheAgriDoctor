@@ -9,7 +9,7 @@ type Notification = {
   id: string
   type: string
   title: string
-  body: string | null
+  message: string | null
   metadata: Record<string, unknown> | null
   read_at: string | null
   created_at: string
@@ -153,7 +153,7 @@ export function NotificationsBell() {
                     <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${levelDot(n.type)}`} />
                     <div className="min-w-0 flex-1">
                       <div className="text-xs font-semibold text-slate-800 truncate">{n.title}</div>
-                      {n.body && <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{n.body}</div>}
+                      {n.message && <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{n.message}</div>}
                       <div className="text-[10px] text-slate-400 mt-1">{timeAgo(n.created_at)} ago</div>
                     </div>
                   </div>

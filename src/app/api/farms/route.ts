@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 export async function GET() {
   try {
@@ -15,7 +16,7 @@ export async function GET() {
     if (error) throw error
     return NextResponse.json(data)
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return serverError('/api/farms', err)
   }
 }
 
@@ -52,10 +53,10 @@ export async function POST(req: NextRequest) {
 
     if (error) {
       console.error('[/api/farms POST] insert error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return serverError('/api/farms', error)
     }
     return NextResponse.json(data, { status: 201 })
   } catch (err: unknown) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return serverError('/api/farms', err)
   }
 }

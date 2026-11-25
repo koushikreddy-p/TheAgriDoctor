@@ -6,7 +6,7 @@ import {
   MessageCircle, Users as UsersIcon, Leaf, Satellite, Radar, Bell,
   CalendarClock, CheckCircle2,
 } from 'lucide-react'
-import { computeAlerts, alertToneClasses, type MonitorSnapshot } from '@/lib/alerts'
+import { computeAlerts, alertToneClasses, type MonitorSnapshot, ndviMean } from '@/lib/alerts'
 import { WeatherRadar } from '@/components/farm/weather-radar'
 
 export const dynamic = 'force-dynamic'
@@ -98,7 +98,7 @@ export default async function DashboardPage() {
     const critical = alerts.filter((a) => a.level === 'critical').length
     const warning = alerts.filter((a) => a.level === 'warning').length
     const snap = farm.latest_monitor_snapshot
-    const ndvi = snap?.ndvi?.mean ?? null
+    const ndvi = ndviMean(snap) ?? null
     const moisture = snap?.soil?.moisture ?? null
     const tempK = snap?.weather?.main?.temp ?? null
     return {

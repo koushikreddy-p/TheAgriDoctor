@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUser } from '@/lib/auth'
+import { serverError } from '@/lib/api-error'
 
 // GET /api/notifications
 //   ?limit=20 &offset=0 &unread_only=1 &level=critical|warning|info &farm_id=<uuid>
@@ -28,7 +29,7 @@ export async function GET(req: NextRequest) {
   if (farmId) q = q.contains('metadata', { farm_id: farmId })
 
   const { data, error, count } = await q
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return serverError('/api/notifications', error)
 
   const { count: unread } = await supabase
     .from('notifications')
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
     case 'mark_all_read': {
       const { error } = await supabase.from('notifications')
         .update({ read_at: now }).eq('user_id', user.id).is('read_at', null)
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      if (error) return serverError('/api/notifications', error)
       return NextResponse.json({ ok: true })
     }
     case 'mark_read': {
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'ids required' }, { status: 400 })
       const { error } = await supabase.from('notifications')
         .update({ read_at: now }).eq('user_id', user.id).in('id', body.ids)
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      if (error) return serverError('/api/notifications', error)
       return NextResponse.json({ ok: true })
     }
     case 'mark_unread': {
@@ -74,7 +75,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'ids required' }, { status: 400 })
       const { error } = await supabase.from('notifications')
         .update({ read_at: null }).eq('user_id', user.id).in('id', body.ids)
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      if (error) return serverError('/api/notifications', error)
       return NextResponse.json({ ok: true })
     }
     case 'delete': {
@@ -82,13 +83,13 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'ids required' }, { status: 400 })
       const { error } = await supabase.from('notifications')
         .delete().eq('user_id', user.id).in('id', body.ids)
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      if (error) return serverError('/api/notifications', error)
       return NextResponse.json({ ok: true })
     }
     case 'delete_all_read': {
       const { error } = await supabase.from('notifications')
         .delete().eq('user_id', user.id).not('read_at', 'is', null)
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      if (error) return serverError('/api/notifications', error)
       return NextResponse.json({ ok: true })
     }
     default:

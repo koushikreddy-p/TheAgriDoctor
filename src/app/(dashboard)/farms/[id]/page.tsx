@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   Trees, Leaf, ChevronLeft, Plus, Loader2, ChevronRight,
-  Droplets, AlertTriangle, CheckCircle2, Clock, Trash2
+  Droplets, CheckCircle2, Clock, Trash2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
