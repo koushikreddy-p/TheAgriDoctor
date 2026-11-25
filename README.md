@@ -11,7 +11,7 @@ TheAgriDoctor is a modern AI-powered agriculture platform designed to assist far
 
 The platform combines AI, geospatial technologies, and modern full-stack architecture to provide real-time decision support for farmers.
 
-Built using Next.js 14, Supabase, OpenRouter AI, Gemini AI, and OpenWeather APIs.
+Built with Next.js 15, Supabase, OpenRouter and Google Gemini AI, OpenWeatherMap, Agro Monitoring and data.gov.in.
 
 ---
 
@@ -56,172 +56,72 @@ Built using Next.js 14, Supabase, OpenRouter AI, Gemini AI, and OpenWeather APIs
 
 # Tech Stack
 
-## Frontend
-- Next.js 14 (App Router)
-- React 18
-- Tailwind CSS
-- shadcn/ui
-- Zustand
-- TanStack Query
-- React Hook Form
-- Zod
-
-## Backend
-- Next.js Route Handlers
-- Supabase PostgreSQL
-- Supabase Auth
-- Supabase Storage
-
-## AI & APIs
-- OpenRouter AI
-- Gemini 2.5 Flash
-- OpenWeather Agro API
-- Leaflet Maps
-
-## Deployment
-- Vercel
-- Supabase Cloud
+- **Frontend:** Next.js 15.5 (App Router), React 19, TypeScript, Tailwind CSS, shadcn/ui, Leaflet maps
+- **Backend:** Next.js route handlers (24 API routes), Supabase (PostgreSQL with row-level security, Auth, Storage)
+- **AI:** OpenRouter (free NVIDIA, Meta, Google and Alibaba models) with automatic fallback to Google Gemini 2.5 Flash / Flash-Lite
+- **Data:** OpenWeatherMap, Agro Monitoring (satellite NDVI, soil), data.gov.in (mandi prices), RainViewer (radar)
+- **Hosting:** Vercel + Supabase Cloud
 
 ---
 
-# System Architecture
+# AI Engine — multi-model fallback
 
-- Next.js App Router frontend
-- Server Components + Route Handlers
-- Supabase PostgreSQL database
-- JWT authentication
-- Multi-provider AI fallback system
-- Edge-ready deployment architecture
-
----
-
-# AI Pipeline
+Every AI feature goes through one gateway (`src/lib/ai.ts`) that walks an ordered chain until a model answers:
 
 ```txt
-OpenRouter Vision Models
-    ↓
-Gemma Vision
-    ↓
-Qwen VL
-    ↓
-Llama Vision
-    ↓
-Gemini 2.5 Flash Fallback
+Text   (advisor, task planner, forum):  Nemotron 3 Super 120B → Llama 3.3 70B → Gemini 2.5 Flash → Gemini 2.5 Flash-Lite
+Vision (crop diagnosis):                Gemma 3 27B → Qwen 2.5 VL 72B → Llama 3.2 11B Vision → Gemini 2.5 Flash → Gemini 2.5 Flash-Lite
 ```
 
-This architecture ensures reliability even during provider failures or rate limits.
+- Time limits per model (30 s; 20 s to first streamed word) and 55 s overall
+- Circuit breaker: rate-limited or failing models rest (429: 60 s, 5xx: 20 s, retired: 10 min)
+- Structured answers validated; a malformed one is retried on a different model
+- Streaming failover on both providers; per-farmer rate limits
+- **AI Engine page** (`/ai-status`): live model health, recent requests, and a live failover test with simulated outages
 
 ---
 
-# Core Modules
+# Security
 
-- Authentication & Profile Management
-- Farm Management
-- Crop Cycle Tracking
-- AI Disease Diagnosis
-- Personalized AI Advisor
-- Weather & NDVI Dashboard
-- Market Price Browser
-- Community Forum
-- Smart Alerts & Notifications
+- Row-level security on all 10 tables — each farmer sees only their own data (61 automated attack tests)
+- All third-party API keys stay on the server; weather tiles and satellite images are proxied
+- Input validation, safe error messages, 0 known dependency vulnerabilities (`npm audit`)
 
 ---
 
-# Performance & Security
+# Getting Started
 
-- JWT-based authentication
-- RLS-ready database schema
-- Secure image uploads
-- Optimized API routes
-- Dynamic component loading
-- Mobile responsive UI
-- Edge deployment optimization
-
----
-
-# Installation
-
-Clone the repository:
+Full go-live guide: **[docs/SETUP.md](docs/SETUP.md)** (accounts, database, environment variables, deploy, smoke test).
 
 ```bash
 git clone https://github.com/koushikreddy-p/TheAgriDoctor.git
-```
-
-Navigate into the project directory:
-
-```bash
 cd TheAgriDoctor
-```
-
-Install dependencies:
-
-```bash
 npm install
-```
-
-Run the development server:
-
-```bash
+cp .env.example .env.local   # fill in your keys
 npm run dev
 ```
 
+Database: run [`supabase/setup.sql`](supabase/setup.sql) once in the Supabase SQL editor.
+
 ---
 
-# Environment Variables
+# Tests
 
-Create a `.env.local` file:
-
-```env
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-
-OPENROUTER_API_KEY=
-GEMINI_API_KEY=
-
-OPENWEATHER_API_KEY=
+```bash
+npm test                                   # 18 AI pipeline tests (simulated network)
+# Database security tests (local PostgreSQL) — see supabase/tests/rls_test.py
 ```
 
----
-
-# Project Highlights
-
-- Production-ready full-stack architecture
-- AI-powered agriculture assistance
-- Real-time streaming AI chat
-- Multi-provider AI fallback system
-- Geo-spatial farm visualization
-- Mobile-first responsive dashboard
-- Cloud-native deployment
+Preview the UI with sample data and no accounts: [scripts/preview/README.md](scripts/preview/README.md).
 
 ---
 
 # Future Improvements
 
-- Offline diagnosis support
-- Native mobile application
-- Push notifications
-- AI-powered yield prediction
-- IoT sensor integration
-- Advanced multilingual support
-
----
-
-# Screenshots
-
-Add project screenshots inside:
-
-```txt
-/screenshots
-```
-
-Suggested screenshots:
-- Dashboard
-- AI Diagnosis
-- Advisor Chat
-- Weather Module
-- Heatmap
-- Farm Management
+- Scheduled background field scans with SMS / WhatsApp alerts
+- Diagnosis accuracy benchmark on a labelled crop-disease dataset
+- Offline support and a native mobile app
+- IoT soil-sensor integration
 
 ---
 
