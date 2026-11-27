@@ -46,3 +46,6 @@ next-env.d.ts
 .windsurf/
 skills-lock.json
 *.py
+
+# keep the database security test suite
+!supabase/tests/*.py
